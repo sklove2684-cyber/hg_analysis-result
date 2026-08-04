@@ -1,0 +1,2 @@
+"""Local machine state."""
+

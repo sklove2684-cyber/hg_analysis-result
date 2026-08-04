@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "honyu-automation"
+version = "0.1.0"
+description = "LabSolutions PDF analysis workflow automation for Windows"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "PySide6>=6.8,<7",
+  "pdfplumber>=0.11,<0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "pytest-qt>=4.4,<5"]
+
+[project.scripts]
+honyu-automation = "honyu_app.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/honyu_app"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]

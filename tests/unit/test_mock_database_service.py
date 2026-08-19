@@ -106,6 +106,22 @@ class MockDatabaseServiceTests(unittest.TestCase):
         self.assertEqual(loaded.samples[0].sample_type, SampleType.STD)
         self.assertEqual(loaded.samples[0].peaks[0].retention_time, Decimal("2.364"))
         self.assertEqual(loaded.samples[0].peaks[0].area_raw, 24_350)
+        self.assertEqual(loaded.review_status, ReviewStatus.SAVED)
+
+    def test_existing_reviewed_rows_are_migrated_to_saved(self) -> None:
+        batch = make_batch()
+        result = self.service.save_analysis_batch(SaveAnalysisBatchCommand(batch))
+        with closing(sqlite3.connect(self.db_file)) as connection:
+            connection.execute(
+                "UPDATE analysis_batches SET review_status = 'REVIEWED' WHERE batch_id = ?",
+                (str(result.batch_id),),
+            )
+            connection.commit()
+        reopened = MockDatabaseService(self.db_file)
+        self.assertEqual(
+            reopened.get_batch_detail(result.batch_id).review_status,
+            ReviewStatus.SAVED,
+        )
 
     def test_duplicate_hash_is_blocked_even_with_different_filename(self) -> None:
         first = make_batch()

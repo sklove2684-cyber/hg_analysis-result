@@ -18,6 +18,41 @@ ET.register_namespace("", MAIN)
 ET.register_namespace("r", REL)
 
 
+def _source_namespaces(xml: bytes) -> dict[str, str]:
+    return {
+        (prefix or b"").decode("ascii"): uri.decode("utf-8")
+        for prefix, uri in re.findall(
+            rb'\sxmlns(?::([A-Za-z_][\w.-]*))?="([^"]+)"', xml
+        )
+    }
+
+
+def _serialize_preserving_namespaces(root: ET.Element, source_xml: bytes) -> bytes:
+    namespaces = _source_namespaces(source_xml)
+    for prefix, uri in namespaces.items():
+        if prefix == "xml" or re.fullmatch(r"ns\d+", prefix):
+            continue
+        try:
+            ET.register_namespace(prefix, uri)
+        except ValueError:
+            pass
+    serialized = ET.tostring(root, encoding="utf-8", xml_declaration=False)
+    end = serialized.find(b">")
+    if end < 0:
+        raise ExcelExportError("Excel XML 루트 요소를 직렬화할 수 없습니다.")
+    opening = serialized[:end]
+    additions: list[bytes] = []
+    for prefix, uri in namespaces.items():
+        declaration = (
+            f'xmlns:{prefix}="{uri}"' if prefix else f'xmlns="{uri}"'
+        ).encode("utf-8")
+        if declaration not in opening:
+            additions.append(b" " + declaration)
+    if additions:
+        serialized = opening + b"".join(additions) + serialized[end:]
+    return b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + serialized
+
+
 def _column_number(address: str) -> int:
     match = re.fullmatch(r"([A-Z]+)([1-9]\d*)", address.upper())
     if not match:
@@ -141,7 +176,7 @@ class XlsxXmlCellWriter:
                     cell.remove(child)
             value = ET.SubElement(cell, f"{{{MAIN}}}v")
             value.text = str(item.value)
-        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+        return _serialize_preserving_namespaces(root, xml)
 
     @staticmethod
     def _style_for_new_cell(row: ET.Element, address: str) -> str | None:
@@ -170,6 +205,10 @@ class XlsxXmlCellWriter:
         if calc is None:
             calc = ET.SubElement(root, f"{{{MAIN}}}calcPr")
         calc.set("calcMode", "auto")
+        # The export can still be produced when local Office activation blocks
+        # COM automation.  In that case a licensed Excel installation will
+        # rebuild every formula the next time the result workbook is opened.
         calc.set("fullCalcOnLoad", "1")
         calc.set("forceFullCalc", "1")
-        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+        calc.set("calcOnSave", "1")
+        return _serialize_preserving_namespaces(root, xml)

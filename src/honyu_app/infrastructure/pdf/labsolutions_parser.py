@@ -53,14 +53,25 @@ class LabSolutionsParser:
                 if cancel_check and cancel_check():
                     raise ExtractionCancelledError("PDF 추출이 취소되었습니다.")
                 text = page.extract_text() or ""
-                metadata = self._extract_metadata(text, page_no)
                 table = self._find_peak_table(page.extract_tables(), page_no)
-                sample = self._build_sample(page_no, metadata, table)
+                if self._field(text, "Sample Name"):
+                    metadata = self._extract_metadata(text, page_no)
+                    sample = self._build_sample(page_no, metadata, table)
+                    samples.append(sample)
+                    added_peaks = sample.peaks
+                else:
+                    if not samples:
+                        raise ValidationError(
+                            f"PDF {page_no}페이지: Sample 정보가 없는 연속 Peak Table 앞에 "
+                            "원본 Sample 페이지가 없습니다."
+                        )
+                    added_peaks = self._append_continuation_page(
+                        samples[-1], page_no, table
+                    )
                 warning_count += sum(
                     peak.exclude_reason is ExcludeReason.UNKNOWN_MATERIAL
-                    for peak in sample.peaks
+                    for peak in added_peaks
                 )
-                samples.append(sample)
                 if progress_callback:
                     progress_callback(page_no, total_pages)
             page_count = total_pages
@@ -161,8 +172,61 @@ class LabSolutionsParser:
     ) -> Sample:
         raw_name = str(metadata["sample_name"])
         sample_type, level, replicate, worker_key, is_blank = self._classify_sample(raw_name)
+        peaks = self._build_peaks(page_no, raw_name, sample_type, rows)
+        return Sample(
+            page_no=page_no,
+            sample_name_raw=raw_name,
+            sample_name_normalized=self._normalize_sample_name(raw_name),
+            sample_type=sample_type,
+            data_filename=metadata["data_filename"],
+            method_filename=metadata["method_filename"],
+            batch_filename=metadata["batch_filename"],
+            acquired_at=metadata["acquired_at"],
+            concentration_level=level,
+            replicate_no=replicate,
+            worker_match_key=worker_key,
+            is_blank=is_blank,
+            peaks=peaks,
+        )
+
+    def _append_continuation_page(
+        self,
+        sample: Sample,
+        page_no: int,
+        rows: list[list[str | None]],
+    ) -> list[Peak]:
+        existing_peak_numbers = {peak.peak_no for peak in sample.peaks}
+        added = self._build_peaks(
+            page_no,
+            sample.sample_name_raw,
+            sample.sample_type,
+            rows,
+            dibk_group_start=sum(
+                peak.material_standard == "DIBK" for peak in sample.peaks
+            ),
+        )
+        duplicate_numbers = existing_peak_numbers.intersection(
+            peak.peak_no for peak in added
+        )
+        if duplicate_numbers:
+            raise ValidationError(
+                f"PDF {page_no}페이지: 연속 Peak Table의 Peak 번호가 앞 페이지와 "
+                f"중복됩니다: {sorted(duplicate_numbers)}"
+            )
+        sample.peaks.extend(added)
+        return added
+
+    def _build_peaks(
+        self,
+        page_no: int,
+        raw_name: str,
+        sample_type: SampleType,
+        rows: list[list[str | None]],
+        *,
+        dibk_group_start: int = 0,
+    ) -> list[Peak]:
         peaks: list[Peak] = []
-        dibk_group = 0
+        dibk_group = dibk_group_start
         for row in rows:
             if len(row) != 8:
                 raise ValidationError(
@@ -194,21 +258,7 @@ class LabSolutionsParser:
                     f"PDF {page_no}페이지 Peak {row[0]} 숫자 변환 오류"
                 ) from exc
             peaks.append(peak)
-        return Sample(
-            page_no=page_no,
-            sample_name_raw=raw_name,
-            sample_name_normalized=self._normalize_sample_name(raw_name),
-            sample_type=sample_type,
-            data_filename=metadata["data_filename"],
-            method_filename=metadata["method_filename"],
-            batch_filename=metadata["batch_filename"],
-            acquired_at=metadata["acquired_at"],
-            concentration_level=level,
-            replicate_no=replicate,
-            worker_match_key=worker_key,
-            is_blank=is_blank,
-            peaks=peaks,
-        )
+        return peaks
 
     @staticmethod
     def _normalize_sample_name(value: str) -> str:
@@ -233,8 +283,9 @@ class LabSolutionsParser:
                 "고": ConcentrationLevel.HIGH,
             }
             return SampleType.RECOVERY, levels[recovery.group(1)], int(recovery.group(2)), None, False
-        if name.isdigit():
-            return SampleType.NUMERIC, None, None, name, False
+        numeric = re.fullmatch(r"(\d+)(?:\D.*)?", name)
+        if numeric:
+            return SampleType.NUMERIC, None, None, numeric.group(1), False
         return SampleType.UNKNOWN, None, None, None, False
 
     @staticmethod

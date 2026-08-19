@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from honyu_app.application.shared_folder import SharedFolderController
-from honyu_app.domain.enums import HalfYear
+from honyu_app.domain.enums import HalfYear, ReviewStatus
 from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
 from honyu_app.services.database_service import DatabaseService
 from honyu_app.ui.theme import Card, field_label, make_path_label, set_status_tone
@@ -136,7 +136,7 @@ class PdfRegistrationPage(QWidget):
         source_grid.setHorizontalSpacing(12)
         source_grid.setVerticalSpacing(8)
         self.analysis_type = QComboBox()
-        self.analysis_type.addItem("혼유")
+        self.analysis_type.addItems(("혼유", "알콜"))
         source_grid.addWidget(field_label("분석 종류"), 0, 0, 1, 2)
         source_grid.addWidget(self.analysis_type, 1, 0, 1, 2)
         source_grid.addWidget(field_label("PDF 파일"), 2, 0, 1, 2)
@@ -266,6 +266,8 @@ class PdfRegistrationPage(QWidget):
         if not selected:
             return
         self.pdf_path.setText(selected)
+        if "알콜" in Path(selected).name:
+            self.analysis_type.setCurrentText("알콜")
         parsed_range = self._parser.extract_analysis_range(Path(selected).name)
         if parsed_range:
             self.start_no.setValue(parsed_range[0])
@@ -322,10 +324,17 @@ class PdfRegistrationPage(QWidget):
     def _on_extraction_completed(self, batch) -> None:
         duplicate = self._database.check_duplicate(batch.source_file.file_hash)
         if duplicate.is_duplicate:
+            if duplicate.existing_batch_id is None:
+                self.extraction_status.setText("동일 PDF가 이미 저장되어 있습니다.")
+                set_status_tone(self.extraction_status, "warning")
+                return
+            existing = self._database.get_batch_detail(duplicate.existing_batch_id)
+            existing.review_status = ReviewStatus.SAVED
             self.extraction_status.setText(
-                f"동일 PDF가 이미 저장되어 있습니다: {duplicate.existing_batch_code}"
+                f"기존 DB 배치를 불러왔습니다  ·  {duplicate.existing_batch_code}"
             )
-            set_status_tone(self.extraction_status, "warning")
+            set_status_tone(self.extraction_status, "success")
+            self.extraction_ready.emit(existing)
             return
         self.extraction_status.setText(
             f"추출 완료  ·  Sample {len(batch.samples)}개  ·  경고 {batch.warning_count}개"

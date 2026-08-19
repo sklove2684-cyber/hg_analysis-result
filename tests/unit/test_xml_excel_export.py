@@ -1,14 +1,16 @@
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from decimal import Decimal
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
+from unittest.mock import patch
 
 from honyu_app.application.create_excel_export import CreateExcelExportService
 from honyu_app.domain.enums import ExcelPreviewStatus, SampleType
-from honyu_app.domain.errors import ExcelExportError
+from honyu_app.domain.errors import ExcelExportError, ExcelRecalculationError
 from honyu_app.domain.models import (
     ExcelCellWrite,
     ExcelPreviewResult,
@@ -16,6 +18,7 @@ from honyu_app.domain.models import (
 )
 from honyu_app.domain.results import ExportJobResult
 from honyu_app.infrastructure.excel.workbook_inspector import XlsxTemplateInspector
+from honyu_app.infrastructure.excel.excel_recalculator import ExcelComRecalculator
 from honyu_app.infrastructure.excel.workbook_validator import XlsxWorkbookValidator
 from honyu_app.infrastructure.excel.xml_cell_writer import MAIN, NS, XlsxXmlCellWriter
 
@@ -61,11 +64,21 @@ class XlsxXmlExportTests(unittest.TestCase):
         self.assertTrue(validation.valid, validation.errors)
 
         with ZipFile(self.output) as archive:
-            workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+            workbook_xml = archive.read("xl/workbook.xml")
+            workbook = ET.fromstring(workbook_xml)
+            sheet_parts = XlsxXmlCellWriter._sheet_parts(
+                {name: archive.read(name) for name in archive.namelist()}
+            )
+            area_xml = archive.read(sheet_parts["area"])
         calc = workbook.find(f"{{{MAIN}}}calcPr")
         self.assertEqual(calc.attrib["calcMode"], "auto")
         self.assertEqual(calc.attrib["fullCalcOnLoad"], "1")
         self.assertEqual(calc.attrib["forceFullCalc"], "1")
+        self.assertEqual(calc.attrib["calcOnSave"], "1")
+        self.assertIn(b'xmlns:x15=', workbook_xml)
+        self.assertIn(b'mc:Ignorable="x15"', workbook_xml)
+        self.assertIn(b'xmlns:x14ac=', area_xml)
+        self.assertIn(b'mc:Ignorable="x14ac"', area_xml)
 
     def test_formula_target_is_refused(self) -> None:
         with self.assertRaises(ExcelExportError):
@@ -97,6 +110,24 @@ class XlsxXmlExportTests(unittest.TestCase):
         )
         self.assertFalse(validation.valid)
         self.assertTrue(any("area!R15" in error for error in validation.errors))
+
+    def test_validator_detects_missing_office_compatibility_namespace(self) -> None:
+        self.writer.write_copy(TEMPLATE, self.output, self.writes)
+        broken = Path(self.temp.name) / "missing-namespace.xlsx"
+        with ZipFile(self.output, "r") as source, ZipFile(broken, "w") as target:
+            for info in source.infolist():
+                data = source.read(info.filename)
+                if info.filename == "xl/workbook.xml":
+                    data = data.replace(
+                        b' xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"',
+                        b"",
+                    )
+                target.writestr(info, data)
+        validation = self.validator.validate(
+            TEMPLATE, broken, self.writes, after_excel_recalculation=False
+        )
+        self.assertFalse(validation.valid)
+        self.assertTrue(any("x15" in error for error in validation.errors))
 
     def test_creation_service_promotes_only_validated_result_and_saves_job(self) -> None:
         batch_id = uuid4()
@@ -147,9 +178,54 @@ class XlsxXmlExportTests(unittest.TestCase):
 
         self.assertTrue(output.is_file())
         self.assertTrue(recalculator.called)
+        self.assertTrue(result.recalculated)
         self.assertEqual(result.output_path, output.resolve())
         self.assertEqual(result.export_job_id, job_id)
         self.assertEqual(database.command.output_path, str(output.resolve()))
+
+    def test_unlicensed_office_still_creates_a_valid_recalculation_pending_file(self) -> None:
+        batch_id = uuid4()
+
+        class Preview:
+            def preview(inner_self, actual_batch_id, template, method):
+                return ExcelPreviewResult(
+                    template,
+                    str(method),
+                    rows=[
+                        ExcelPreviewRow(
+                            sample_name="STD1",
+                            sample_type=SampleType.STD,
+                            material="n-hexane",
+                            peak_no=1,
+                            retention_time=Decimal("1.0"),
+                            area_raw=123,
+                            applied_area=123,
+                            target_sheet="area",
+                            target_cell="F15",
+                            status=ExcelPreviewStatus.MAPPED,
+                        )
+                    ],
+                )
+
+        class Database:
+            def save_export_job(inner_self, command):
+                return ExportJobResult(uuid4(), True)
+
+        class UnlicensedRecalculator:
+            def recalculate(inner_self, path):
+                raise ExcelRecalculationError(
+                    "Office 제품 인증 필요", code="OFFICE_NOT_ACTIVATED"
+                )
+
+        output = Path(self.temp.name) / "unlicensed-result.xlsx"
+        result = CreateExcelExportService(
+            Database(), Preview(), self.writer, self.validator, UnlicensedRecalculator()
+        ).create(batch_id, TEMPLATE, output, "A", "TEST-PC")
+
+        self.assertTrue(output.is_file())
+        self.assertTrue(result.validation_passed)
+        self.assertFalse(result.recalculated)
+        self.assertEqual(XlsxTemplateInspector().inspect(output).cell("area", "F15").value, 123)
 
     def test_creation_service_refuses_existing_output(self) -> None:
         existing = Path(self.temp.name) / "existing.xlsx"
@@ -158,6 +234,22 @@ class XlsxXmlExportTests(unittest.TestCase):
         with self.assertRaises(ExcelExportError):
             service.create(uuid4(), TEMPLATE, existing, "A", "TEST-PC")
         self.assertEqual(existing.read_bytes(), b"do not overwrite")
+
+
+class ExcelRecalculatorErrorTests(unittest.TestCase):
+    def test_unlicensed_office_has_a_clear_error_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workbook = Path(temp) / "input.xlsx"
+            workbook.write_bytes(b"test")
+            failed = subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="OFFICE_NOT_ACTIVATED"
+            )
+            with patch(
+                "honyu_app.infrastructure.excel.excel_recalculator.subprocess.run",
+                return_value=failed,
+            ):
+                with self.assertRaisesRegex(ExcelRecalculationError, "제품 인증"):
+                    ExcelComRecalculator().recalculate(workbook)
 
 
 if __name__ == "__main__":

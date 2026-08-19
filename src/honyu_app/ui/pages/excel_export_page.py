@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import platform
 from uuid import UUID
@@ -71,7 +72,7 @@ class ExcelExportPage(QWidget):
         layout.setContentsMargins(28, 20, 28, 24)
         layout.setSpacing(12)
 
-        setup = Card("Excel 생성 설정", "DB 배치와 원본 양식을 선택하고 결과 파일 위치를 지정하세요.")
+        setup = Card("Excel 생성 설정", "DB 배치와 Excel 양식을 선택하고 결과 파일 위치를 지정하세요.")
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
@@ -89,10 +90,10 @@ class ExcelExportPage(QWidget):
 
         self.template_path = QLineEdit()
         self.template_path.setReadOnly(True)
-        self.template_path.setPlaceholderText("원본 Excel 양식을 선택하세요")
+        self.template_path.setPlaceholderText("Excel 양식 파일을 선택하세요")
         template_button = QPushButton("원본 선택")
         template_button.clicked.connect(self.choose_template)
-        grid.addWidget(field_label("원본 Excel"), 2, 0, 1, 3)
+        grid.addWidget(field_label("Excel 양식"), 2, 0, 1, 3)
         grid.addWidget(self.template_path, 3, 0, 1, 2)
         grid.addWidget(template_button, 3, 2)
 
@@ -112,14 +113,14 @@ class ExcelExportPage(QWidget):
         self.status = QLabel("배치와 Excel 양식을 선택하세요.")
         self.status.setProperty("statusTone", "neutral")
         self.status.setWordWrap(True)
-        preview_button = QPushButton("입력 미리보기")
-        preview_button.clicked.connect(self.preview)
+        self.preview_button = QPushButton("입력 미리보기")
+        self.preview_button.clicked.connect(self.preview)
         self.create_button = QPushButton("검증 후 Excel 생성")
         self.create_button.setProperty("kind", "primary")
         self.create_button.setEnabled(False)
         self.create_button.clicked.connect(self.create_excel)
         controls.addWidget(self.status, 1)
-        controls.addWidget(preview_button)
+        controls.addWidget(self.preview_button)
         controls.addWidget(self.create_button)
         setup.body.addLayout(controls)
         layout.addWidget(setup)
@@ -150,6 +151,9 @@ class ExcelExportPage(QWidget):
         self.issue_label.setProperty("statusTone", "neutral")
         self.issue_label.setWordWrap(True)
         layout.addWidget(self.issue_label)
+        self.batch_combo.currentIndexChanged.connect(self._preview_input_changed)
+        self.std_method.currentIndexChanged.connect(self._preview_input_changed)
+        self.output_path.textChanged.connect(self._update_create_button)
         self.refresh_batches()
 
     def refresh_batches(self) -> None:
@@ -174,15 +178,16 @@ class ExcelExportPage(QWidget):
 
     def choose_template(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
-            self, "원본 Excel 선택", self.template_path.text(), "Excel (*.xlsx)"
+            self, "Excel 양식 선택", self.template_path.text(), "Excel (*.xlsx)"
         )
         if selected:
+            self._result = None
             self.template_path.setText(selected)
             template = Path(selected)
             if not self.output_path.text().strip():
                 self.output_path.setText(str(template.with_name(f"{template.stem}_결과.xlsx")))
             self.create_button.setEnabled(False)
-            self.status.setText("원본 Excel을 선택했습니다. 입력 미리보기를 실행하세요.")
+            self.status.setText("Excel 양식을 선택했습니다. 입력 미리보기를 실행하세요.")
             set_status_tone(self.status, "neutral")
 
     def choose_output(self) -> None:
@@ -195,6 +200,43 @@ class ExcelExportPage(QWidget):
                 selected += ".xlsx"
             self.output_path.setText(selected)
 
+    def _preview_input_changed(self, *_args) -> None:
+        if self._result is None:
+            return
+        self._result = None
+        self.create_button.setEnabled(False)
+        self.status.setText("선택 내용이 변경되었습니다. 입력 미리보기를 다시 실행하세요.")
+        set_status_tone(self.status, "neutral")
+
+    def _update_create_button(self, *_args) -> None:
+        output = Path(self.output_path.text().strip())
+        self.create_button.setEnabled(
+            bool(
+                self._result
+                and self._result.can_generate
+                and output.parent.is_dir()
+                and not output.exists()
+            )
+        )
+
+    def _ensure_available_output_path(self) -> Path | None:
+        raw = self.output_path.text().strip()
+        if not raw:
+            return None
+        output = Path(raw)
+        if not output.exists():
+            return None
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        candidate = output.with_name(f"{output.stem}_{stamp}{output.suffix}")
+        counter = 2
+        while candidate.exists():
+            candidate = output.with_name(
+                f"{output.stem}_{stamp}_{counter}{output.suffix}"
+            )
+            counter += 1
+        self.output_path.setText(str(candidate))
+        return candidate
+
     def preview(self) -> None:
         batch_id = self.batch_combo.currentData()
         template = Path(self.template_path.text().strip())
@@ -202,16 +244,29 @@ class ExcelExportPage(QWidget):
             QMessageBox.warning(self, "배치 선택 필요", "DB 분석 배치를 선택하세요.")
             return
         if not template.is_file():
-            QMessageBox.warning(self, "Excel 선택 필요", "원본 Excel 파일을 선택하세요.")
+            QMessageBox.warning(self, "Excel 양식 필요", "Excel 양식 파일을 선택하세요.")
             return
+        self._result = None
+        self.create_button.setEnabled(False)
+        self.status.setText("Excel 입력 위치를 검증하고 있습니다...")
+        set_status_tone(self.status, "neutral")
         try:
             self._result = self._preview_service.preview(
                 batch_id, template, self.std_method.currentData()
             )
         except Exception as exc:
+            self.status.setText("입력 미리보기에 실패했습니다. 설정을 확인한 뒤 다시 시도하세요.")
+            set_status_tone(self.status, "error")
             QMessageBox.critical(self, "미리보기 실패", str(exc))
             return
+        renamed_output = self._ensure_available_output_path()
         self._show_result(self._result)
+        if renamed_output is not None and not self._result.issues:
+            self.issue_label.setText(
+                "검증 오류가 없습니다. 기존 결과 파일을 보존하기 위해 "
+                f"새 파일명으로 저장합니다:\n{renamed_output.name}"
+            )
+            set_status_tone(self.issue_label, "success")
 
     def create_excel(self) -> None:
         batch_id = self.batch_combo.currentData()
@@ -241,16 +296,30 @@ class ExcelExportPage(QWidget):
                 batch_id, template, output, self.std_method.currentData(), platform.node()
             )
         except Exception as exc:
-            self.status.setText("Excel 생성에 실패했습니다.")
+            self.status.setText(
+                "Excel 생성에 실패했습니다. 미리보기는 유지되며 저장 위치를 바꿔 다시 시도할 수 있습니다."
+            )
             set_status_tone(self.status, "error")
             QMessageBox.critical(self, "Excel 생성 실패", str(exc))
-            self.create_button.setEnabled(bool(self._result and self._result.can_generate))
+            self._update_create_button()
             return
-        self.status.setText(
-            f"생성 완료  ·  입력 {result.mapped_cell_count}개  ·  재계산 및 구조검증 완료"
-        )
+        if result.recalculated:
+            self.status.setText(
+                f"생성 완료  ·  입력 {result.mapped_cell_count}개  ·  재계산 및 구조검증 완료"
+            )
+            message = f"결과 파일:\n{result.output_path}"
+        else:
+            self.status.setText(
+                f"생성 완료  ·  입력 {result.mapped_cell_count}개  ·  수식 재계산 대기"
+            )
+            message = (
+                f"결과 파일:\n{result.output_path}\n\n"
+                "Office 미인증으로 수식 재계산은 생략했습니다. "
+                "입력값·수식·서식은 보존되어 있으며, 인증된 Excel에서 파일을 열면 "
+                "전체 수식이 자동 재계산됩니다."
+            )
         set_status_tone(self.status, "success")
-        QMessageBox.information(self, "Excel 생성 완료", f"결과 파일:\n{result.output_path}")
+        QMessageBox.information(self, "Excel 생성 완료", message)
 
     def _show_result(self, result: ExcelPreviewResult) -> None:
         self.table.setRowCount(0)
@@ -287,10 +356,7 @@ class ExcelExportPage(QWidget):
             f"오류 {result.error_count}개"
         )
         set_status_tone(self.status, "success" if result.can_generate else "error")
-        output = Path(self.output_path.text().strip())
-        self.create_button.setEnabled(
-            result.can_generate and output.parent.is_dir() and not output.exists()
-        )
+        self._update_create_button()
         if result.issues:
             self.issue_label.setText(
                 "\n".join(

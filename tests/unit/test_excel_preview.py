@@ -4,7 +4,10 @@ from pathlib import Path
 import unittest
 from uuid import uuid4
 
-from honyu_app.application.preview_excel_export import PreviewExcelExportService
+from honyu_app.application.preview_excel_export import (
+    ONE_COLUMN_PROFILE,
+    PreviewExcelExportService,
+)
 from honyu_app.domain.enums import (
     ConcentrationLevel,
     ExcelPreviewStatus,
@@ -28,6 +31,7 @@ from honyu_app.services.excel_template_service import (
 
 
 SHEETS = ("검량선", "area", "최종결과", "회수율", "STD제조")
+ONE_COLUMN_SHEETS = ("검량선", "area입력", "회수율", "STD제조", "Sheet1")
 
 
 class FakeDatabase:
@@ -53,6 +57,14 @@ def snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
     return ExcelTemplateSnapshot(
         Path("template.xlsx"),
         SHEETS,
+        {(cell.sheet, cell.address): cell for cell in cells},
+    )
+
+
+def one_column_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
+    return ExcelTemplateSnapshot(
+        Path("one-column-template.xlsx"),
+        ONE_COLUMN_SHEETS,
         {(cell.sheet, cell.address): cell for cell in cells},
     )
 
@@ -163,15 +175,106 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertEqual(result.rows[0].status, ExcelPreviewStatus.ERROR)
         self.assertEqual(result.issues[0].code, "TARGET_IS_FORMULA")
 
-    def test_duplicate_single_material_peaks_are_a_target_collision(self) -> None:
+    def test_duplicate_single_material_peaks_select_highest_area(self) -> None:
         std = Sample(
             1, "STD1", "STD1", SampleType.STD, replicate_no=1,
             peaks=[peak(1, 100), peak(2, 200)],
         )
         result = self.service().preview_batch(batch([std]), Path("template.xlsx"), "A")
-        self.assertFalse(result.can_generate)
-        self.assertTrue(all(row.status is ExcelPreviewStatus.ERROR for row in result.rows))
-        self.assertEqual(result.issues[0].code, "TARGET_COLLISION")
+        mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
+        excluded = [row for row in result.rows if row.status is ExcelPreviewStatus.EXCLUDED]
+        self.assertTrue(result.can_generate)
+        self.assertEqual([(row.peak_no, row.target_cell) for row in mapped], [(2, "F15")])
+        self.assertEqual(excluded[0].peak_no, 1)
+        self.assertEqual(
+            excluded[0].exclude_reason,
+            ExcludeReason.MATERIAL_AREA_NOT_TOP1.value,
+        )
+
+    def test_one_column_duplicate_material_selects_peak_closest_to_target_rt(self) -> None:
+        worker = Sample(
+            1,
+            "126-기존저장업체",
+            "126-기존저장업체",
+            SampleType.UNKNOWN,
+            peaks=[
+                Peak(7, Decimal("3.678"), 1097, material_raw="c-hexane", material_standard="c-hexane"),
+                Peak(8, Decimal("3.816"), 10515, material_raw="c-hexane", material_standard="c-hexane"),
+                Peak(9, Decimal("3.911"), 9546, material_raw="c-hexane", material_standard="c-hexane"),
+            ],
+        )
+        template = one_column_snapshot(
+            TemplateCell(ONE_COLUMN_PROFILE.area_sheet, "A25", True, "126", "string")
+        )
+
+        result = self.service(template).preview_batch(
+            batch([worker]), Path("one-column-template.xlsx"), "A"
+        )
+
+        mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
+        excluded = [row for row in result.rows if row.status is ExcelPreviewStatus.EXCLUDED]
+        self.assertEqual([(row.peak_no, row.applied_area, row.target_cell) for row in mapped], [(7, 1097, "I25")])
+        self.assertEqual(
+            [row.exclude_reason for row in excluded],
+            [
+                ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value,
+                ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value,
+            ],
+        )
+
+    def test_one_column_template_maps_std_recovery_and_worker_cells(self) -> None:
+        template = one_column_snapshot(
+            TemplateCell("area입력", "A21", True, "39", "string")
+        )
+        samples = [
+            Sample(
+                1, "STD1", "STD1", SampleType.STD, replicate_no=1,
+                peaks=[peak(1, 100, "methyl acetate")],
+            ),
+            Sample(
+                2, "저2", "저2", SampleType.RECOVERY,
+                concentration_level=ConcentrationLevel.LOW,
+                replicate_no=2,
+                peaks=[peak(1, 200, "c-hexane")],
+            ),
+            Sample(
+                3, "39", "39", SampleType.NUMERIC, worker_match_key="39",
+                peaks=[peak(1, 300, "n-heptane")],
+            ),
+        ]
+        result = self.service(template).preview_batch(
+            batch(samples), Path("one-column-template.xlsx"), "A"
+        )
+        mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
+        self.assertTrue(result.can_generate)
+        self.assertEqual(
+            [(row.target_sheet, row.target_cell) for row in mapped],
+            [("area입력", "G5"), ("회수율", "C31"), ("area입력", "L21")],
+        )
+
+    def test_one_column_ignores_formula_rows_that_mirror_worker_numbers(self) -> None:
+        template = one_column_snapshot(
+            TemplateCell("area입력", "A23", True, "262-124", "string"),
+            TemplateCell(
+                "area입력", "A159", True, "262-124", "formula", "A23", 1
+            ),
+        )
+        worker = Sample(
+            1,
+            "124",
+            "124",
+            SampleType.NUMERIC,
+            worker_match_key="124",
+            peaks=[peak(1, 300, "c-hexane")],
+        )
+
+        result = self.service(template).preview_batch(
+            batch([worker]), Path("one-column-template.xlsx"), "A"
+        )
+
+        self.assertTrue(result.can_generate)
+        self.assertEqual(result.rows[0].target_cell, "I23")
+        self.assertFalse(result.issues)
 
     def test_dibk_equal_area_uses_peak_number_as_tie_breaker(self) -> None:
         values = [peak(3, 100, "DIBK"), peak(1, 100, "DIBK"), peak(2, 100, "DIBK")]
@@ -190,6 +293,21 @@ class XlsxTemplateInspectorTests(unittest.TestCase):
         self.assertEqual(inspected.cell("area", "F15").value_type, "blank")
         self.assertTrue(inspected.cell("area", "R15").has_formula)
         self.assertIn("Z15+AA15", inspected.cell("area", "R15").formula)
+
+    def test_one_column_template_exposes_confirmed_input_cells(self) -> None:
+        template = Path(__file__).parents[3] / "TEST" / "(1컬럼혼유-틀).xlsx"
+        inspected = XlsxTemplateInspector().inspect(template)
+        self.assertEqual(inspected.sheet_names, ONE_COLUMN_SHEETS)
+        for sheet, address in (
+            ("area입력", "G5"),
+            ("area입력", "J5"),
+            ("area입력", "M5"),
+            ("area입력", "P5"),
+            ("회수율", "B30"),
+            ("회수율", "E38"),
+        ):
+            with self.subTest(sheet=sheet, address=address):
+                self.assertFalse(inspected.cell(sheet, address).has_formula)
 
 
 if __name__ == "__main__":

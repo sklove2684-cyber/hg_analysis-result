@@ -26,6 +26,13 @@ class SampleClassificationTests(unittest.TestCase):
         self.assertEqual(sample_type, SampleType.NUMERIC)
         self.assertEqual(worker_key, "245")
 
+    def test_numeric_worker_key_with_workplace_suffix(self) -> None:
+        sample_type, _, _, worker_key, _ = self.parser._classify_sample(
+            "125-현대오일"
+        )
+        self.assertEqual(sample_type, SampleType.NUMERIC)
+        self.assertEqual(worker_key, "125")
+
     def test_name_ending_b_is_recovery_blank(self) -> None:
         sample_type, _, _, _, is_blank = self.parser._classify_sample("회수율-B")
         self.assertEqual(sample_type, SampleType.RECOVERY_BLANK)

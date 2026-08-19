@@ -22,6 +22,7 @@ from honyu_app.infrastructure.excel.xml_cell_writer import XlsxXmlCellWriter
 from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
 from honyu_app.services.database_service import DatabaseService
 from honyu_app.ui.pages.excel_export_page import ExcelExportPage
+from honyu_app.ui.pages.database_page import DatabasePage
 from honyu_app.ui.pages.extraction_review_page import ExtractionReviewPage
 from honyu_app.ui.pages.pdf_registration_page import PdfRegistrationPage
 from honyu_app.ui.theme import APP_STYLESHEET, Card
@@ -131,6 +132,7 @@ class MainWindow(QMainWindow):
         self.pages.setObjectName("pageStack")
         registration_page = PdfRegistrationPage(shared_folder_controller, parser, database)
         review_page = ExtractionReviewPage(ReviewExtractionService(database))
+        database_page = DatabasePage(database)
         preview_service = PreviewExcelExportService(database, XlsxTemplateInspector())
         create_service = CreateExcelExportService(
             database,
@@ -144,11 +146,18 @@ class MainWindow(QMainWindow):
         registration_page.extraction_ready.connect(review_page.load_batch)
         registration_page.extraction_ready.connect(lambda _: self.navigation.setCurrentRow(1))
         review_page.batch_saved.connect(excel_page.load_batch)
+        review_page.batch_saved.connect(database_page.refresh_batches)
         review_page.batch_saved.connect(lambda _: self.navigation.setCurrentRow(3))
+        review_page.excel_requested.connect(excel_page.load_batch)
+        review_page.excel_requested.connect(lambda _: self.navigation.setCurrentRow(3))
+        database_page.review_requested.connect(review_page.load_batch)
+        database_page.review_requested.connect(lambda _: self.navigation.setCurrentRow(1))
+        database_page.excel_requested.connect(excel_page.load_batch)
+        database_page.excel_requested.connect(lambda _: self.navigation.setCurrentRow(3))
 
         self.pages.addWidget(registration_page)
         self.pages.addWidget(review_page)
-        self.pages.addWidget(_placeholder("DB 조회 준비 중", "분석 배치 검색과 수정 이력 화면이 들어올 자리입니다."))
+        self.pages.addWidget(database_page)
         self.pages.addWidget(excel_page)
         self.pages.addWidget(_placeholder("설정 및 로그 준비 중", "연결 정보와 처리 로그 화면이 들어올 자리입니다."))
         workspace_layout.addWidget(self.pages, 1)

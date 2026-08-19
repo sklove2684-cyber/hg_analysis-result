@@ -74,6 +74,11 @@ class MockDatabaseService:
         try:
             with self._connect() as connection:
                 connection.executescript(schema)
+                connection.execute(
+                    "UPDATE analysis_batches SET review_status = ? "
+                    "WHERE review_status = ?",
+                    (ReviewStatus.SAVED.value, ReviewStatus.REVIEWED.value),
+                )
         except (OSError, sqlite3.Error) as exc:
             raise DatabaseUnavailableError(
                 f"Mock DB를 초기화할 수 없습니다: {self._database_file}"
@@ -128,7 +133,7 @@ class MockDatabaseService:
                         batch.analysis_no_start, batch.analysis_no_end, batch.parser_name,
                         batch.parser_version, batch.parser_layout_id,
                         batch.extracted_at.isoformat(), batch.warning_count,
-                        batch.review_status.value, batch.workplace, batch.year, batch.period,
+                        ReviewStatus.SAVED.value, batch.workplace, batch.year, batch.period,
                         batch.device_id, batch.analyst, now, now,
                     ),
                 )

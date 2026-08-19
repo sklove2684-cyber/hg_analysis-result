@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from collections import Counter
 from pathlib import Path
 from uuid import UUID
 
@@ -10,6 +11,8 @@ from honyu_app.domain.errors import ValidationError
 from honyu_app.domain.models import AnalysisBatch, Peak, Sample
 from honyu_app.domain.models import PeakCorrection
 from honyu_app.domain.results import SaveAnalysisBatchResult
+from honyu_app.domain.queries import BatchSearchQuery
+from honyu_app.domain.results import BatchSummary
 from honyu_app.infrastructure.pdf.material_normalizer import MaterialNormalizer
 from honyu_app.services.database_service import DatabaseService
 
@@ -80,8 +83,16 @@ class ReviewExtractionService:
         ]
         if unknown:
             pages = sorted({peak.source_page for peak in unknown})
+            material_counts = Counter(
+                (peak.material_raw or "(물질명 없음)").strip() for peak in unknown
+            )
+            materials = ", ".join(
+                f"{name} {count}개"
+                for name, count in sorted(material_counts.items())
+            )
             raise ValidationError(
-                f"미등록 물질 Peak {len(unknown)}개를 먼저 처리해야 합니다. 페이지: {pages}"
+                f"미등록 물질 Peak {len(unknown)}개를 먼저 처리해야 합니다. "
+                f"물질별: {materials}. 페이지: {pages}"
             )
         batch.review_status = ReviewStatus.REVIEWED
 
@@ -114,6 +125,14 @@ class ReviewExtractionService:
 
     def list_area_corrections(self, peak_id: UUID) -> list[PeakCorrection]:
         return self._database.list_peak_corrections(peak_id)
+
+    def list_saved_batches(self) -> list[BatchSummary]:
+        return self._database.search_batches(BatchSearchQuery())
+
+    def load_saved_batch(self, batch_id: UUID) -> AnalysisBatch:
+        batch = self._database.get_batch_detail(batch_id)
+        batch.review_status = ReviewStatus.SAVED
+        return batch
 
     @staticmethod
     def export_csv(batch: AnalysisBatch, output_file: Path) -> None:

@@ -22,6 +22,26 @@ SAMPLE_PDF = (
     / "혼유 39-73 병합완료.pdf"
 )
 SAMPLE_XLSX = Path(__file__).resolve().parents[3] / "TEST" / "(혼유) 틀.xlsx"
+ONE_COLUMN_PDF = (
+    Path(__file__).resolve().parents[3]
+    / "TEST"
+    / "1컬럼혼유 39-73병합완료.pdf"
+)
+ONE_COLUMN_XLSX = (
+    Path(__file__).resolve().parents[3]
+    / "TEST"
+    / "(1컬럼혼유-틀).xlsx"
+)
+ALCOHOL_CONTINUATION_PDF = (
+    Path(__file__).resolve().parents[3]
+    / "TEST"
+    / "알콜(2) 74-119.pdf"
+)
+ALCOHOL_XLSX = (
+    Path(__file__).resolve().parents[3]
+    / "TEST"
+    / "(알콜2) 74-119.xlsx"
+)
 
 
 @unittest.skipUnless(SAMPLE_PDF.is_file(), f"샘플 PDF 없음: {SAMPLE_PDF}")
@@ -165,3 +185,138 @@ class LabSolutionsSamplePdfRegressionTests(unittest.TestCase):
         self.assertTrue(preview.can_generate)
         self.assertEqual(len(writes), 196)
         self.assertTrue(validation.valid, validation.errors)
+
+
+@unittest.skipUnless(
+    ONE_COLUMN_PDF.is_file() and ONE_COLUMN_XLSX.is_file(),
+    "1컬럼 PDF 또는 Excel 양식이 없습니다.",
+)
+class OneColumnSampleRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.batch = LabSolutionsParser().parse(
+            ONE_COLUMN_PDF,
+            analysis_type="혼유",
+            analysis_no_start=39,
+            analysis_no_end=73,
+        )
+
+    def test_materials_are_registered_without_review_warning(self) -> None:
+        self.assertEqual(len(self.batch.samples), 19)
+        self.assertEqual(sum(len(sample.peaks) for sample in self.batch.samples), 82)
+        self.assertEqual(self.batch.warning_count, 0)
+        self.assertEqual(
+            {
+                peak.material_standard
+                for sample in self.batch.samples
+                for peak in sample.peaks
+                if peak.material_standard not in {None, "CS2"}
+            },
+            {"methyl acetate", "c-hexane", "n-heptane", "isobutyl acetate"},
+        )
+
+    def test_real_batch_maps_to_one_column_template(self) -> None:
+        batch = deepcopy(self.batch)
+        with TemporaryDirectory() as temp:
+            database = MockDatabaseService(Path(temp) / "one-column.db")
+            review = ReviewExtractionService(database)
+            review.complete_review(batch)
+            saved = review.save_batch(batch)
+            preview = PreviewExcelExportService(
+                database, XlsxTemplateInspector()
+            ).preview(saved.batch_id, ONE_COLUMN_XLSX, StdMethod.A)
+
+        mapped = [
+            row for row in preview.rows
+            if row.status is ExcelPreviewStatus.MAPPED
+        ]
+        residual = [
+            row for row in preview.rows
+            if row.exclude_reason == ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value
+        ]
+        self.assertTrue(preview.can_generate)
+        self.assertEqual(len(mapped), 56)
+        self.assertEqual(
+            (mapped[0].target_sheet, mapped[0].target_cell, mapped[0].applied_area),
+            ("area입력", "G5", 8127),
+        )
+        self.assertEqual(
+            [(row.sample_name, row.material, row.applied_area) for row in residual],
+            [("STD5", "c-hexane", 1046)],
+        )
+
+
+@unittest.skipUnless(
+    ALCOHOL_CONTINUATION_PDF.is_file(),
+    f"연속 페이지 샘플 PDF 없음: {ALCOHOL_CONTINUATION_PDF}",
+)
+class LabSolutionsContinuationPageRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.batch = LabSolutionsParser().parse(
+            ALCOHOL_CONTINUATION_PDF,
+            analysis_type="알콜",
+            analysis_no_start=74,
+            analysis_no_end=119,
+        )
+
+    def test_continuation_pages_are_merged_into_the_previous_sample(self) -> None:
+        self.assertEqual(self.batch.source_file.page_count, 63)
+        self.assertEqual(len(self.batch.samples), 57)
+        self.assertTrue(
+            {29, 34, 38, 43, 49, 62}.isdisjoint(
+                sample.page_no for sample in self.batch.samples
+            )
+        )
+
+    def test_sample_90_keeps_all_peaks_from_pages_28_and_29(self) -> None:
+        sample = next(
+            item for item in self.batch.samples if item.worker_match_key == "90"
+        )
+        self.assertEqual(len(sample.peaks), 33)
+        self.assertEqual([sample.peaks[0].peak_no, sample.peaks[-1].peak_no], [1, 33])
+        self.assertEqual({peak.source_page for peak in sample.peaks}, {28, 29})
+
+    def test_alcohol_materials_are_registered_without_review_warnings(self) -> None:
+        self.assertEqual(self.batch.warning_count, 0)
+        registered = [
+            peak
+            for sample in self.batch.samples
+            for peak in sample.peaks
+            if peak.material_standard in {"IBA", "n-BTOH"}
+        ]
+        self.assertEqual(len(registered), 138)
+        self.assertTrue(all(peak.include_for_excel for peak in registered))
+
+    @unittest.skipUnless(ALCOHOL_XLSX.is_file(), f"알콜 Excel 양식 없음: {ALCOHOL_XLSX}")
+    def test_alcohol_batch_maps_to_its_template_by_closest_retention_time(self) -> None:
+        batch = deepcopy(self.batch)
+        with TemporaryDirectory() as temp:
+            database = MockDatabaseService(Path(temp) / "alcohol.db")
+            review = ReviewExtractionService(database)
+            review.complete_review(batch)
+            saved = review.save_batch(batch)
+            preview = PreviewExcelExportService(
+                database, XlsxTemplateInspector()
+            ).preview(saved.batch_id, ALCOHOL_XLSX, StdMethod.A)
+
+        mapped = [
+            row for row in preview.rows
+            if row.status is ExcelPreviewStatus.MAPPED
+        ]
+        sample_90 = [row for row in mapped if row.sample_name.startswith("90-")]
+        self.assertTrue(preview.can_generate, preview.issues)
+        self.assertEqual((preview.mapped_count, preview.excluded_count, preview.error_count), (70, 509, 0))
+        self.assertFalse(
+            any(issue.code == "UNSUPPORTED_MATERIAL" for issue in preview.issues)
+        )
+        self.assertEqual(
+            [
+                (row.material, str(row.retention_time), row.applied_area, row.target_cell)
+                for row in sample_90
+            ],
+            [
+                ("IBA", "3.352", 781127, "F37"),
+                ("n-BTOH", "3.833", 443235, "I37"),
+            ],
+        )

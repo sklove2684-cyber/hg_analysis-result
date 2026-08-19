@@ -38,7 +38,10 @@ class ReviewExtractionServiceTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_unknown_material_blocks_review(self) -> None:
-        with self.assertRaisesRegex(ValidationError, "미등록 물질"):
+        with self.assertRaisesRegex(
+            ValidationError,
+            r"미등록 물질 Peak 1개.*물질별: 새물질 1개.*페이지: \[1\]",
+        ):
             self.service.complete_review(review_batch())
 
     def test_user_can_map_then_complete_and_save(self) -> None:

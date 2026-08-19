@@ -24,6 +24,16 @@ class MaterialNormalizerTests(unittest.TestCase):
             "시클로헥사논": "c-hexanone",
             "DIBK": "DIBK",
             "cs2": "CS2",
+            "메틸아세테이트": "methyl acetate",
+            "초산메틸": "methyl acetate",
+            "시클로헥산": "c-hexane",
+            "cyclohexane": "c-hexane",
+            "헵탄": "n-heptane",
+            "n-heptane": "n-heptane",
+            "이소부틸아세테이트": "isobutyl acetate",
+            "초산이소부틸": "isobutyl acetate",
+            "IBA": "IBA",
+            "n-BTOH": "n-BTOH",
         }
         for raw, expected in aliases.items():
             with self.subTest(raw=raw):

@@ -51,6 +51,7 @@ def _stat_box(label: str) -> tuple[QFrame, QLabel]:
 
 class ExtractionReviewPage(QWidget):
     batch_saved = Signal(object)
+    excel_requested = Signal(object)
 
     def __init__(self, service: ReviewExtractionService) -> None:
         super().__init__()
@@ -81,6 +82,20 @@ class ExtractionReviewPage(QWidget):
         layout.addLayout(summary)
 
         toolbar = Card("검토 작업", "행을 선택해 물질명, 포함 여부 또는 Area를 수정하세요.")
+        saved_row = QHBoxLayout()
+        saved_row.setSpacing(8)
+        self.saved_batches = QComboBox()
+        self.saved_batches.setMinimumWidth(420)
+        refresh_saved = QPushButton("목록 새로고침")
+        refresh_saved.clicked.connect(self.refresh_saved_batches)
+        open_saved = QPushButton("저장된 배치 열기")
+        open_saved.setProperty("kind", "primary")
+        open_saved.clicked.connect(self.open_saved_batch)
+        saved_row.addWidget(field_label("저장된 DB 배치"))
+        saved_row.addWidget(self.saved_batches, 1)
+        saved_row.addWidget(refresh_saved)
+        saved_row.addWidget(open_saved)
+        toolbar.body.addLayout(saved_row)
         self.status = QLabel("PDF 추출 결과를 기다리고 있습니다.")
         self.status.setProperty("statusTone", "neutral")
         self.status.setWordWrap(True)
@@ -95,14 +110,17 @@ class ExtractionReviewPage(QWidget):
         toolbar_row.addWidget(field_label("표시 필터"))
         toolbar_row.addWidget(self.filter)
         toolbar_row.addSpacing(10)
-        for text, slot in (
-            ("물질명 수정", self.edit_material),
-            ("포함/제외 전환", self.toggle_peak),
-            ("Area 수정", self.correct_area),
-            ("수정 이력", self.show_area_history),
-        ):
+        edit_actions = (
+            ("material_button", "물질명 수정", self.edit_material),
+            ("toggle_button", "포함/제외 전환", self.toggle_peak),
+            ("area_button", "Area 수정", self.correct_area),
+            ("history_button", "수정 이력", self.show_area_history),
+        )
+        for attribute, text, slot in edit_actions:
             button = QPushButton(text)
             button.clicked.connect(slot)
+            button.setEnabled(False)
+            setattr(self, attribute, button)
             toolbar_row.addWidget(button)
         toolbar_row.addStretch(1)
         toolbar.body.addLayout(toolbar_row)
@@ -124,26 +142,89 @@ class ExtractionReviewPage(QWidget):
         actions = QHBoxLayout()
         export = QPushButton("CSV 내보내기")
         export.clicked.connect(self.save_csv)
-        complete = QPushButton("검토 완료")
-        complete.clicked.connect(self.complete_review)
-        save = QPushButton("DB에 저장")
-        save.setProperty("kind", "primary")
-        save.clicked.connect(self.save_batch)
+        self.complete_button = QPushButton("검토 완료")
+        self.complete_button.setEnabled(False)
+        self.complete_button.clicked.connect(self.complete_review)
+        self.save_button = QPushButton("DB에 저장")
+        self.save_button.setProperty("kind", "primary")
+        self.save_button.setEnabled(False)
+        self.save_button.clicked.connect(self.save_batch)
+        self.excel_button = QPushButton("Excel 생성으로 이동")
+        self.excel_button.setProperty("kind", "primary")
+        self.excel_button.setEnabled(False)
+        self.excel_button.clicked.connect(self.open_excel_export)
         actions.addWidget(export)
         actions.addStretch(1)
-        actions.addWidget(complete)
-        actions.addWidget(save)
+        actions.addWidget(self.complete_button)
+        actions.addWidget(self.save_button)
+        actions.addWidget(self.excel_button)
         layout.addLayout(actions)
+        self.refresh_saved_batches()
+
+    def refresh_saved_batches(self) -> None:
+        selected = self.saved_batches.currentData()
+        self.saved_batches.clear()
+        for summary in self._service.list_saved_batches():
+            self.saved_batches.addItem(
+                f"{summary.batch_code}  ·  {summary.pdf_filename}  ·  "
+                f"{summary.analysis_no_start}-{summary.analysis_no_end}",
+                summary.batch_id,
+            )
+        if selected is not None:
+            index = self.saved_batches.findData(selected)
+            if index >= 0:
+                self.saved_batches.setCurrentIndex(index)
+
+    def open_saved_batch(self) -> None:
+        batch_id = self.saved_batches.currentData()
+        if not isinstance(batch_id, UUID):
+            QMessageBox.warning(self, "저장 배치 없음", "먼저 DB에 저장된 배치가 없습니다.")
+            return
+        try:
+            self.load_batch(self._service.load_saved_batch(batch_id))
+        except Exception as exc:
+            QMessageBox.critical(self, "배치 열기 실패", str(exc))
 
     def load_batch(self, batch: AnalysisBatch) -> None:
         self._batch = batch
         self._latest_areas.clear()
+        if batch.review_status is ReviewStatus.SAVED:
+            for sample in batch.samples:
+                for peak in sample.peaks:
+                    history = self._service.list_area_corrections(peak.peak_id)
+                    if history:
+                        self._latest_areas[peak.peak_id] = history[-1].area_after
         self.refresh_table()
+        saved = batch.review_status is ReviewStatus.SAVED
+        prefix = "기존 DB 배치" if saved else "신규 추출 결과"
         self.status.setText(
-            f"{batch.source_file.original_name}  ·  Sample {len(batch.samples)}개  ·  "
-            f"검토 경고 {batch.warning_count}개"
+            f"{prefix}  ·  {batch.source_file.original_name}  ·  "
+            f"Sample {len(batch.samples)}개  ·  검토 경고 {batch.warning_count}개"
+            + ("  ·  DB 저장 완료  ·  Excel 생성 가능" if saved else "")
         )
-        set_status_tone(self.status, "warning" if batch.warning_count else "success")
+        set_status_tone(self.status, "success" if saved or not batch.warning_count else "warning")
+        self._sync_actions()
+
+    def _sync_actions(self) -> None:
+        status = self._batch.review_status if self._batch else None
+        saved = status is ReviewStatus.SAVED
+        reviewed = status is ReviewStatus.REVIEWED
+        has_batch = self._batch is not None
+        self.complete_button.setEnabled(has_batch and not saved and not reviewed)
+        self.save_button.setEnabled(reviewed)
+        self.excel_button.setEnabled(saved)
+        self.complete_button.setText("검토 완료됨" if saved or reviewed else "검토 완료")
+        self.save_button.setText("DB 저장됨" if saved else "DB에 저장")
+        self.material_button.setEnabled(has_batch and not saved)
+        self.toggle_button.setEnabled(has_batch and not saved)
+        self.area_button.setEnabled(saved)
+        self.history_button.setEnabled(saved)
+
+    def open_excel_export(self) -> None:
+        if self._batch is None or self._batch.review_status is not ReviewStatus.SAVED:
+            QMessageBox.warning(self, "DB 저장 필요", "DB에 저장된 배치만 Excel 생성에 사용할 수 있습니다.")
+            return
+        self.excel_requested.emit(self._batch)
 
     def refresh_table(self) -> None:
         self.table.setRowCount(0)
@@ -248,6 +329,7 @@ class ExtractionReviewPage(QWidget):
             self._service.complete_review(self._batch)
             self.status.setText("검토가 완료되었습니다. DB에 저장할 수 있습니다.")
             set_status_tone(self.status, "success")
+            self._sync_actions()
         except Exception as exc:
             QMessageBox.warning(self, "검토 미완료", str(exc))
 
@@ -259,6 +341,8 @@ class ExtractionReviewPage(QWidget):
             self.batch_saved.emit(self._batch)
             self.status.setText(f"DB 저장 완료  ·  {result.batch_code}")
             set_status_tone(self.status, "success")
+            self._sync_actions()
+            self.refresh_saved_batches()
         except Exception as exc:
             QMessageBox.critical(self, "DB 저장 실패", str(exc))
 

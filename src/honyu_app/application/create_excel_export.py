@@ -7,7 +7,11 @@ from uuid import UUID, uuid4
 from honyu_app.application.preview_excel_export import PreviewExcelExportService
 from honyu_app.domain.commands import SaveExportJobCommand
 from honyu_app.domain.enums import ExcelPreviewStatus, StdMethod
-from honyu_app.domain.errors import ExcelExportError, WorkbookStructureError
+from honyu_app.domain.errors import (
+    ExcelExportError,
+    ExcelRecalculationError,
+    WorkbookStructureError,
+)
 from honyu_app.domain.models import ExcelCellWrite, ExcelExportResult
 from honyu_app.services.database_service import DatabaseService
 from honyu_app.services.excel_export_services import (
@@ -60,8 +64,9 @@ class CreateExcelExportService:
         if len({(item.sheet, item.address.upper()) for item in writes}) != len(writes):
             raise ExcelExportError("같은 Excel 셀에 둘 이상의 Peak가 배정되었습니다.")
 
-        partial = output.with_name(f".{output.stem}.partial-{uuid4().hex}.xlsx")
+        partial = output.with_name(f"honyu_export_{uuid4().hex}.xlsx")
         self._writer.write_copy(template, partial, writes)
+        recalculated = True
         try:
             before = self._validator.validate(
                 template, partial, writes, after_excel_recalculation=False
@@ -75,6 +80,14 @@ class CreateExcelExportService:
 
             try:
                 self._recalculator.recalculate(partial)
+            except ExcelRecalculationError as exc:
+                if exc.code == "OFFICE_NOT_ACTIVATED":
+                    recalculated = False
+                else:
+                    failed = self._preserve_failure(partial, output, "재계산실패")
+                    raise ExcelExportError(
+                        f"Excel 전체 재계산에 실패했습니다. 점검용 파일: {failed}\n{exc}"
+                    ) from exc
             except Exception as exc:
                 failed = self._preserve_failure(partial, output, "재계산실패")
                 raise ExcelExportError(
@@ -82,7 +95,10 @@ class CreateExcelExportService:
                 ) from exc
 
             after = self._validator.validate(
-                template, partial, writes, after_excel_recalculation=True
+                template,
+                partial,
+                writes,
+                after_excel_recalculation=recalculated,
             )
             if not after.valid:
                 failed = self._preserve_failure(partial, output, "검증실패")
@@ -106,7 +122,9 @@ class CreateExcelExportService:
                 device_id=device_id.strip() or "UNKNOWN",
             )
         )
-        return ExcelExportResult(output, len(writes), True, True, job.export_job_id)
+        return ExcelExportResult(
+            output, len(writes), True, recalculated, job.export_job_id
+        )
 
     @staticmethod
     def _validate_paths(template: Path, output: Path) -> None:

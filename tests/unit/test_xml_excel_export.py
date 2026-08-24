@@ -1,4 +1,5 @@
 from pathlib import Path
+import base64
 import subprocess
 import tempfile
 import unittest
@@ -171,7 +172,8 @@ class XlsxXmlExportTests(unittest.TestCase):
         database = Database()
         recalculator = Recalculator()
         service = CreateExcelExportService(
-            database, Preview(), self.writer, self.validator, recalculator
+            database, Preview(), self.writer, self.validator, recalculator,
+            recalculate_with_excel=True,
         )
         output = Path(self.temp.name) / "final.xlsx"
         result = service.create(batch_id, TEMPLATE, output, "A", "TEST-PC")
@@ -219,7 +221,8 @@ class XlsxXmlExportTests(unittest.TestCase):
 
         output = Path(self.temp.name) / "unlicensed-result.xlsx"
         result = CreateExcelExportService(
-            Database(), Preview(), self.writer, self.validator, UnlicensedRecalculator()
+            Database(), Preview(), self.writer, self.validator, UnlicensedRecalculator(),
+            recalculate_with_excel=True,
         ).create(batch_id, TEMPLATE, output, "A", "TEST-PC")
 
         self.assertTrue(output.is_file())
@@ -237,6 +240,174 @@ class XlsxXmlExportTests(unittest.TestCase):
 
 
 class ExcelRecalculatorErrorTests(unittest.TestCase):
+    def test_default_creation_skips_com_and_validates_input_structure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            template = root / "template.xlsx"
+            template.write_bytes(b"template")
+            output = root / "final.xlsx"
+            work = root / "work"
+            validation_modes = []
+
+            class Preview:
+                def preview(self, *_args):
+                    return ExcelPreviewResult(
+                        template,
+                        "A",
+                        rows=[ExcelPreviewRow(
+                            sample_name="STD1",
+                            sample_type=SampleType.STD,
+                            material="n-hexane",
+                            peak_no=1,
+                            retention_time=Decimal("1.0"),
+                            area_raw=123,
+                            applied_area=123,
+                            target_sheet="area입력",
+                            target_cell="F15",
+                            status=ExcelPreviewStatus.MAPPED,
+                        )],
+                    )
+
+            class Writer:
+                def write_copy(self, _template, partial, _writes):
+                    partial.write_bytes(b"generated xlsx")
+
+            class Validator:
+                def validate(self, *_args, after_excel_recalculation):
+                    validation_modes.append(after_excel_recalculation)
+                    return type("Validation", (), {"valid": True, "errors": ()})()
+
+            class Recalculator:
+                def recalculate(self, _path):
+                    raise AssertionError("COM recalculation must not run by default")
+
+            class Database:
+                def save_export_job(self, _command):
+                    return ExportJobResult(uuid4(), True)
+
+            with patch(
+                "honyu_app.application.create_excel_export.excel_work_dir",
+                return_value=work,
+            ):
+                result = CreateExcelExportService(
+                    Database(), Preview(), Writer(), Validator(), Recalculator()
+                ).create(uuid4(), template, output, "A", "TEST-PC")
+
+            self.assertTrue(output.is_file())
+            self.assertEqual(validation_modes, [False, False])
+            self.assertFalse(result.recalculated)
+            self.assertEqual(list(work.iterdir()), [])
+
+    def test_failed_export_is_kept_out_of_final_output_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            final_directory = root / "Desktop" / "분석프로그램"
+            diagnostics = root / "diagnostics"
+            final_directory.mkdir(parents=True)
+            partial = root / "work" / "partial.xlsx"
+            partial.parent.mkdir()
+            partial.write_bytes(b"diagnostic workbook")
+            output = final_directory / "result.xlsx"
+
+            with patch(
+                "honyu_app.application.create_excel_export.failed_exports_dir",
+                return_value=diagnostics,
+            ):
+                failed = CreateExcelExportService._preserve_failure(
+                    partial, output, "검증실패"
+                )
+
+            self.assertFalse(partial.exists())
+            self.assertTrue(failed.is_file())
+            self.assertEqual(failed.parent, diagnostics)
+            self.assertEqual(list(final_directory.iterdir()), [])
+
+    def test_formula_cache_comparison_detects_updated_results(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            before = Path(temp) / "before.xlsx"
+            after = Path(temp) / "after.xlsx"
+            sheet = (
+                '<worksheet xmlns="http://schemas.openxmlformats.org/'
+                'spreadsheetml/2006/main"><sheetData><row r="1">'
+                '<c r="A1"><f>1+1</f><v>{value}</v></c>'
+                '</row></sheetData></worksheet>'
+            )
+            with ZipFile(before, "w") as archive:
+                archive.writestr("xl/worksheets/sheet1.xml", sheet.format(value="1"))
+            with ZipFile(after, "w") as archive:
+                archive.writestr("xl/worksheets/sheet1.xml", sheet.format(value="2"))
+
+            old = ExcelComRecalculator._formula_cache_values(before)
+            new = ExcelComRecalculator._formula_cache_values(after)
+
+            self.assertEqual(len(old), 1)
+            self.assertNotEqual(old, new)
+
+    def test_recalculator_uses_an_owned_excel_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workbook = Path(temp) / "input.xlsx"
+            workbook.write_bytes(b"test")
+            failed = subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="EXCEL_NOT_FOUND"
+            )
+            with patch(
+                "honyu_app.infrastructure.excel.excel_recalculator.subprocess.run",
+                return_value=failed,
+            ) as run:
+                with self.assertRaises(ExcelRecalculationError):
+                    ExcelComRecalculator().recalculate(workbook)
+
+            command = run.call_args.args[0]
+            encoded = command[command.index("-EncodedCommand") + 1]
+            script = base64.b64decode(encoded).decode("utf-16le")
+            self.assertIn("New-Object -ComObject Excel.Application", script)
+            self.assertIn("EXCEL_DEDICATED_INSTANCE_NOT_CREATED", script)
+            self.assertIn("[ref]$excelProcessId", script)
+            self.assertIn(
+                "$existingExcelPids -contains [int]$excelProcessId", script
+            )
+            self.assertNotIn("[ref]$pid", script)
+            self.assertIn("$excel.Workbooks.Open", script)
+            self.assertIn("$book.ForceFullCalculation = $false", script)
+            self.assertIn("$excel.Calculate()", script)
+            self.assertNotIn("$book.Calculate()", script)
+            self.assertNotIn("CalculateFullRebuild", script)
+            self.assertIn("$worksheet.Calculate()", script)
+            self.assertIn("$formulaCells.Calculate()", script)
+            self.assertIn("$excel.CalculateFull()", script)
+            self.assertIn("method=excel.Calculate()", script)
+            self.assertIn("method=Worksheet.Calculate()", script)
+            self.assertIn("method=Range.Calculate()", script)
+            self.assertIn("method=excel.CalculateFull()", script)
+            self.assertIn("$excel.Workbooks.Count -ne 1", script)
+            self.assertIn("$originalCalculationMode = $excel.Calculation", script)
+            self.assertIn("Write-Diagnostic 'calculation_mode_before'", script)
+            self.assertIn("$excel.Calculation = -4105", script)
+            self.assertIn("Write-WorkbookState 'automatic_calculation_enabled'", script)
+            self.assertLess(
+                script.index("$excel.Calculation = -4105"),
+                script.index("$excel.Calculate()"),
+            )
+            self.assertLess(
+                script.index("$book = $excel.Workbooks.Open"),
+                script.index("$bootstrapBook.Close($false)"),
+            )
+            self.assertIn("$calculationWatch =", script)
+            self.assertIn("Write-WorkbookState 'workbook_opened'", script)
+            self.assertIn("Write-WorkbookState 'workbook_calculation_timeout'", script)
+            for diagnostic_field in (
+                "excelPid=", "workbook=", "calculation=", "calculationState=",
+                "ready=", "readOnly=", "saved=", "externalLinks=",
+                "connections=", "queries=", "circularReference=",
+                "calculateBeforeSave=", "iteration=", "enableEvents=",
+                "displayAlerts=", "screenUpdating=",
+            ):
+                self.assertIn(diagnostic_field, script)
+            self.assertIn("$excel -ne $null -and $ownsExcel", script)
+            self.assertNotIn("GetActiveObject", script)
+            self.assertNotIn("EXCEL_ALREADY_RUNNING", script)
+            self.assertNotIn("Stop-Process -Id $process.Id", script)
+
     def test_unlicensed_office_has_a_clear_error_message(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workbook = Path(temp) / "input.xlsx"

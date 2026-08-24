@@ -62,6 +62,22 @@ class ReviewExtractionServiceTests(unittest.TestCase):
         self.assertFalse(peak.include_for_excel)
         self.assertEqual(peak.exclude_reason, ExcludeReason.USER_EXCLUDED)
 
+    def test_analysis_manual_mapping_stays_not_supported(self) -> None:
+        batch = review_batch()
+        batch.analysis_type = "B.C"
+        peak = batch.samples[0].peaks[0]
+
+        self.service.set_material_mapping(batch, peak.peak_id, "Methanol")
+
+        self.assertEqual(peak.material_standard, "Methanol")
+        self.assertFalse(peak.include_for_excel)
+        self.assertEqual(
+            peak.exclude_reason,
+            ExcludeReason.MATERIAL_NOT_SUPPORTED_FOR_ANALYSIS,
+        )
+        with self.assertRaisesRegex(ValidationError, "현재 분석종류"):
+            self.service.set_peak_included(batch, peak.peak_id, True)
+
     def test_csv_preserves_raw_and_standard_names(self) -> None:
         batch = review_batch()
         peak = batch.samples[0].peaks[0]

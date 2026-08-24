@@ -33,6 +33,25 @@ class SharedFolderController:
             recent=self._settings_store.load_recent_selection(),
         )
 
+    def export_directory(self) -> tuple[Path | None, SharedFolderConnectionStatus]:
+        state = self.refresh()
+        return self.export_directory_from_state(state)
+
+    @staticmethod
+    def export_directory_from_state(
+        state: SharedFolderViewState,
+    ) -> tuple[Path | None, SharedFolderConnectionStatus]:
+        active = (
+            Path(state.connection.active_base_path)
+            if state.connection.active_base_path
+            else None
+        )
+        if state.connection.storage_mode == "company":
+            recent = state.recent.final_folder
+            if recent and Path(recent).is_dir():
+                active = Path(recent)
+        return active, state.connection
+
     def validate_period(
         self, workplace: str, year: int, half: HalfYear
     ) -> FolderValidationResult:

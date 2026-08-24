@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import shutil
 from uuid import UUID, uuid4
 
 from honyu_app.application.preview_excel_export import PreviewExcelExportService
+from honyu_app.config.paths import excel_work_dir, failed_exports_dir
 from honyu_app.domain.commands import SaveExportJobCommand
 from honyu_app.domain.enums import ExcelPreviewStatus, StdMethod
 from honyu_app.domain.errors import (
@@ -29,12 +31,15 @@ class CreateExcelExportService:
         writer: ExcelCellWriter,
         validator: WorkbookValidator,
         recalculator: ExcelRecalculator,
+        *,
+        recalculate_with_excel: bool = False,
     ) -> None:
         self._database = database
         self._preview_service = preview_service
         self._writer = writer
         self._validator = validator
         self._recalculator = recalculator
+        self._recalculate_with_excel = recalculate_with_excel
 
     def create(
         self,
@@ -64,9 +69,11 @@ class CreateExcelExportService:
         if len({(item.sheet, item.address.upper()) for item in writes}) != len(writes):
             raise ExcelExportError("같은 Excel 셀에 둘 이상의 Peak가 배정되었습니다.")
 
-        partial = output.with_name(f"honyu_export_{uuid4().hex}.xlsx")
+        work_directory = excel_work_dir()
+        work_directory.mkdir(parents=True, exist_ok=True)
+        partial = work_directory / f"honyu_export_{uuid4().hex}.xlsx"
         self._writer.write_copy(template, partial, writes)
-        recalculated = True
+        recalculated = False
         try:
             before = self._validator.validate(
                 template, partial, writes, after_excel_recalculation=False
@@ -78,21 +85,21 @@ class CreateExcelExportService:
                     f"점검용 파일: {failed}\n" + "\n".join(before.errors[:10])
                 )
 
-            try:
-                self._recalculator.recalculate(partial)
-            except ExcelRecalculationError as exc:
-                if exc.code == "OFFICE_NOT_ACTIVATED":
-                    recalculated = False
-                else:
+            if self._recalculate_with_excel:
+                try:
+                    self._recalculator.recalculate(partial)
+                    recalculated = True
+                except ExcelRecalculationError as exc:
+                    if exc.code != "OFFICE_NOT_ACTIVATED":
+                        failed = self._preserve_failure(partial, output, "재계산실패")
+                        raise ExcelExportError(
+                            f"Excel 전체 재계산에 실패했습니다. 점검용 파일: {failed}\n{exc}"
+                        ) from exc
+                except Exception as exc:
                     failed = self._preserve_failure(partial, output, "재계산실패")
                     raise ExcelExportError(
                         f"Excel 전체 재계산에 실패했습니다. 점검용 파일: {failed}\n{exc}"
                     ) from exc
-            except Exception as exc:
-                failed = self._preserve_failure(partial, output, "재계산실패")
-                raise ExcelExportError(
-                    f"Excel 전체 재계산에 실패했습니다. 점검용 파일: {failed}\n{exc}"
-                ) from exc
 
             after = self._validator.validate(
                 template,
@@ -106,7 +113,11 @@ class CreateExcelExportService:
                     "Excel 재계산 후 구조 검증에 실패했습니다. "
                     f"점검용 파일: {failed}\n" + "\n".join(after.errors[:10])
                 )
-            partial.replace(output)
+            try:
+                shutil.move(str(partial), str(output))
+            except Exception:
+                output.unlink(missing_ok=True)
+                raise
         except Exception:
             if partial.exists():
                 partial.unlink()
@@ -142,6 +153,8 @@ class CreateExcelExportService:
     @staticmethod
     def _preserve_failure(partial: Path, output: Path, reason: str) -> Path:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        failed = output.with_name(f"{output.stem}_{reason}_{stamp}.xlsx")
-        partial.replace(failed)
+        directory = failed_exports_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        failed = directory / f"{output.stem}_{reason}_{stamp}.xlsx"
+        shutil.move(str(partial), str(failed))
         return failed

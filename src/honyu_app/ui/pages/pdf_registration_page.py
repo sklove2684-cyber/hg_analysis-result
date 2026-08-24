@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from honyu_app.application.shared_folder import SharedFolderController
+from honyu_app.config.analysis_types import ANALYSIS_TYPE_NAMES, infer_analysis_type
 from honyu_app.domain.enums import HalfYear, ReviewStatus
 from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
 from honyu_app.services.database_service import DatabaseService
@@ -69,6 +70,8 @@ class PdfExtractionWorker(QObject):
 
 class PdfRegistrationPage(QWidget):
     extraction_ready = Signal(object)
+    storage_refresh_requested = Signal()
+    new_work_started = Signal(object)
 
     def __init__(
         self,
@@ -121,7 +124,7 @@ class PdfRegistrationPage(QWidget):
         location.body.addWidget(self.final_path)
         location_actions = QHBoxLayout()
         refresh = QPushButton("작업장 새로고침")
-        refresh.clicked.connect(self.refresh_workplaces)
+        refresh.clicked.connect(self.storage_refresh_requested.emit)
         choose_folder = QPushButton("저장 폴더 선택")
         choose_folder.setProperty("kind", "primary")
         choose_folder.clicked.connect(self.choose_final_folder)
@@ -136,7 +139,9 @@ class PdfRegistrationPage(QWidget):
         source_grid.setHorizontalSpacing(12)
         source_grid.setVerticalSpacing(8)
         self.analysis_type = QComboBox()
-        self.analysis_type.addItems(("혼유", "알콜"))
+        self.analysis_type.addItems(ANALYSIS_TYPE_NAMES)
+        self._analysis_type_user_selected = False
+        self.analysis_type.activated.connect(self._mark_analysis_type_user_selected)
         source_grid.addWidget(field_label("분석 종류"), 0, 0, 1, 2)
         source_grid.addWidget(self.analysis_type, 1, 0, 1, 2)
         source_grid.addWidget(field_label("PDF 파일"), 2, 0, 1, 2)
@@ -191,7 +196,6 @@ class PdfRegistrationPage(QWidget):
         self.workplace.currentTextChanged.connect(self.update_period_path)
         self.year.valueChanged.connect(self.update_period_path)
         self.half.currentTextChanged.connect(self.update_period_path)
-        self.refresh_workplaces()
 
     def selected_half(self) -> HalfYear:
         return HalfYear(self.half.currentText())
@@ -204,6 +208,9 @@ class PdfRegistrationPage(QWidget):
             set_status_tone(self.connection_status, "error")
             self.workplace.clear()
             return
+        self.apply_shared_folder_state(state)
+
+    def apply_shared_folder_state(self, state) -> None:
         self.connection_status.setText(state.connection.message)
         set_status_tone(
             self.connection_status,
@@ -211,6 +218,14 @@ class PdfRegistrationPage(QWidget):
         )
         self.workplace.clear()
         self.workplace.addItems(state.workplaces)
+        local_mode = state.connection.storage_mode == "local"
+        for widget in (self.workplace, self.year, self.half):
+            widget.setEnabled(not local_mode)
+        if local_mode and state.connection.active_base_path:
+            self._final_folder = Path(state.connection.active_base_path)
+            self.period_path.setText("로컬 저장 모드")
+            self.final_path.setText(state.connection.active_base_path)
+            return
         if state.recent.workplace in state.workplaces:
             self.workplace.setCurrentText(state.recent.workplace)
         if state.recent.year:
@@ -226,6 +241,9 @@ class PdfRegistrationPage(QWidget):
         self.update_period_path()
 
     def update_period_path(self) -> None:
+        if self._final_folder is not None and not self.workplace.isEnabled():
+            self.period_path.setText("로컬 저장 모드")
+            return
         workplace = self.workplace.currentText()
         if not workplace:
             self.period_path.setText("작업장을 선택하세요.")
@@ -265,18 +283,39 @@ class PdfRegistrationPage(QWidget):
         )
         if not selected:
             return
+        selected_path = Path(selected)
+        self._analysis_type_user_selected = False
         self.pdf_path.setText(selected)
-        if "알콜" in Path(selected).name:
-            self.analysis_type.setCurrentText("알콜")
-        parsed_range = self._parser.extract_analysis_range(Path(selected).name)
+        detected = self.detect_analysis_type(selected_path.name)
+        if detected is None:
+            self.analysis_type.setCurrentIndex(-1)
+        else:
+            self.analysis_type.setCurrentText(detected)
+        self.start_no.setValue(1)
+        self.end_no.setValue(1)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.new_work_started.emit(selected_path)
+        parsed_range = self._parser.extract_analysis_range(selected_path.name)
         if parsed_range:
             self.start_no.setValue(parsed_range[0])
             self.end_no.setValue(parsed_range[1])
             self.extraction_status.setText("분석번호를 자동 확인했습니다. PDF 추출을 시작하세요.")
             set_status_tone(self.extraction_status, "success")
         else:
-            self.extraction_status.setText("분석번호 범위를 직접 입력하고 확인하세요.")
+            self.extraction_status.setText("분석번호 범위와 분석 종류를 직접 확인하세요.")
             set_status_tone(self.extraction_status, "warning")
+
+    @staticmethod
+    def detect_analysis_type(
+        filename: str,
+        method_filenames: tuple[str, ...] = (),
+        materials: tuple[str, ...] = (),
+    ) -> str | None:
+        return infer_analysis_type(filename, method_filenames, materials)
+
+    def _mark_analysis_type_user_selected(self, *_args) -> None:
+        self._analysis_type_user_selected = True
 
     def start_extraction(self) -> None:
         path = Path(self.pdf_path.text())
@@ -287,6 +326,10 @@ class PdfRegistrationPage(QWidget):
         if self.start_no.value() > self.end_no.value():
             self.extraction_status.setText("분석번호 시작값이 종료값보다 큽니다.")
             set_status_tone(self.extraction_status, "error")
+            return
+        if not self.analysis_type.currentText().strip():
+            self.extraction_status.setText("분석 종류를 확인해 선택하세요.")
+            set_status_tone(self.extraction_status, "warning")
             return
         self._thread = QThread(self)
         self._worker = PdfExtractionWorker(
@@ -322,6 +365,27 @@ class PdfRegistrationPage(QWidget):
 
     @Slot(object)
     def _on_extraction_completed(self, batch) -> None:
+        method_filenames = tuple(
+            sample.method_filename for sample in batch.samples if sample.method_filename
+        )
+        materials = tuple(
+            peak.material_standard or peak.material_raw or ""
+            for sample in batch.samples for peak in sample.peaks
+        )
+        detected = self.detect_analysis_type(
+            batch.source_file.original_name, method_filenames, materials
+        )
+        if (
+            not self._analysis_type_user_selected
+            and detected is not None
+            and detected != batch.analysis_type
+        ):
+            batch.analysis_type = detected
+            batch.batch_code = (
+                f"{detected}-{batch.analysis_no_start}-{batch.analysis_no_end}-"
+                f"{batch.extracted_at:%Y%m%d%H%M%S}"
+            )
+            self.analysis_type.setCurrentText(detected)
         duplicate = self._database.check_duplicate(batch.source_file.file_hash)
         if duplicate.is_duplicate:
             if duplicate.existing_batch_id is None:
@@ -329,6 +393,12 @@ class PdfRegistrationPage(QWidget):
                 set_status_tone(self.extraction_status, "warning")
                 return
             existing = self._database.get_batch_detail(duplicate.existing_batch_id)
+            if existing.analysis_type != batch.analysis_type:
+                self.extraction_status.setText(
+                    "동일 PDF의 기존 DB 배치가 현재 분석 종류와 달라 자동 선택하지 않았습니다."
+                )
+                set_status_tone(self.extraction_status, "warning")
+                return
             existing.review_status = ReviewStatus.SAVED
             self.extraction_status.setText(
                 f"기존 DB 배치를 불러왔습니다  ·  {duplicate.existing_batch_code}"

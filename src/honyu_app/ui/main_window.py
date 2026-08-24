@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -25,7 +25,9 @@ from honyu_app.ui.pages.excel_export_page import ExcelExportPage
 from honyu_app.ui.pages.database_page import DatabasePage
 from honyu_app.ui.pages.extraction_review_page import ExtractionReviewPage
 from honyu_app.ui.pages.pdf_registration_page import PdfRegistrationPage
+from honyu_app.ui.pages.settings_page import SettingsPage
 from honyu_app.ui.theme import APP_STYLESHEET, Card
+from honyu_app.startup_timing import mark
 
 
 PAGES = (
@@ -35,6 +37,25 @@ PAGES = (
     ("04", "Excel 생성", "검증된 Area를 기존 Excel 양식에 안전하게 반영합니다."),
     ("05", "설정 및 로그", "연결 설정과 처리 기록을 확인합니다."),
 )
+
+
+class SharedFolderCheckWorker(QObject):
+    completed = Signal(object)
+    failed = Signal(str)
+    finished = Signal()
+
+    def __init__(self, controller: SharedFolderController) -> None:
+        super().__init__()
+        self._controller = controller
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.completed.emit(self._controller.refresh())
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        finally:
+            self.finished.emit()
 
 
 def _placeholder(title: str, message: str) -> QWidget:
@@ -64,6 +85,9 @@ class MainWindow(QMainWindow):
         self.resize(1440, 900)
         self.setMinimumSize(1100, 720)
         self.setStyleSheet(APP_STYLESHEET)
+        self._shared_folder_controller = shared_folder_controller
+        self._storage_thread: QThread | None = None
+        self._storage_worker: SharedFolderCheckWorker | None = None
 
         root = QWidget()
         root.setObjectName("appRoot")
@@ -141,10 +165,18 @@ class MainWindow(QMainWindow):
             XlsxWorkbookValidator(),
             ExcelComRecalculator(),
         )
-        excel_page = ExcelExportPage(database, preview_service, create_service)
+        excel_page = ExcelExportPage(
+            database, preview_service, create_service, shared_folder_controller
+        )
+        settings_page = SettingsPage(shared_folder_controller)
+        self._registration_page = registration_page
+        self._excel_page = excel_page
+        self._settings_page = settings_page
 
         registration_page.extraction_ready.connect(review_page.load_batch)
         registration_page.extraction_ready.connect(lambda _: self.navigation.setCurrentRow(1))
+        registration_page.new_work_started.connect(review_page.reset_for_new_work)
+        registration_page.new_work_started.connect(excel_page.reset_for_new_work)
         review_page.batch_saved.connect(excel_page.load_batch)
         review_page.batch_saved.connect(database_page.refresh_batches)
         review_page.batch_saved.connect(lambda _: self.navigation.setCurrentRow(3))
@@ -159,13 +191,60 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(review_page)
         self.pages.addWidget(database_page)
         self.pages.addWidget(excel_page)
-        self.pages.addWidget(_placeholder("설정 및 로그 준비 중", "연결 정보와 처리 로그 화면이 들어올 자리입니다."))
+        self.pages.addWidget(settings_page)
         workspace_layout.addWidget(self.pages, 1)
         shell.addWidget(workspace, 1)
 
         self.navigation.currentRowChanged.connect(self._change_page)
+        registration_page.storage_refresh_requested.connect(self.start_background_initialization)
+        settings_page.storage_refresh_requested.connect(self.start_background_initialization)
         self.navigation.setCurrentRow(0)
+        self.navigation.currentRowChanged.connect(self._refresh_storage_for_page)
         self.setCentralWidget(root)
+
+    @Slot()
+    def start_background_initialization(self) -> None:
+        if self._storage_thread is not None:
+            return
+        mark("공유폴더 연결 확인 시작")
+        thread = QThread(self)
+        worker = SharedFolderCheckWorker(self._shared_folder_controller)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.completed.connect(self._apply_storage_state)
+        worker.failed.connect(self._storage_check_failed)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._storage_check_finished)
+        self._storage_thread = thread
+        self._storage_worker = worker
+        thread.start()
+
+    @Slot(object)
+    def _apply_storage_state(self, state) -> None:
+        directory, status = self._shared_folder_controller.export_directory_from_state(state)
+        self._registration_page.apply_shared_folder_state(state)
+        self._excel_page.apply_storage_status(directory, status)
+        self._settings_page.apply_storage_status(directory, status)
+        mark(f"공유폴더 연결 확인 종료 mode={status.storage_mode}")
+
+    @Slot(str)
+    def _storage_check_failed(self, detail: str) -> None:
+        self._registration_page.connection_status.setText(f"공유폴더 확인 오류: {detail}")
+        self._excel_page.storage_mode.setText(f"저장 경로 확인 오류: {detail}")
+        self._settings_page.mode.setText(f"저장 경로 확인 오류: {detail}")
+        mark("공유폴더 연결 확인 오류")
+
+    @Slot()
+    def _storage_check_finished(self) -> None:
+        self._storage_worker = None
+        self._storage_thread = None
+
+    @Slot(int)
+    def _refresh_storage_for_page(self, index: int) -> None:
+        if index in {0, 3, 4}:
+            self.start_background_initialization()
 
     def _change_page(self, index: int) -> None:
         if not 0 <= index < len(PAGES):

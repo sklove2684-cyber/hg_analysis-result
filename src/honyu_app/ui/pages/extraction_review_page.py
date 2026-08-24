@@ -58,6 +58,7 @@ class ExtractionReviewPage(QWidget):
         self.setObjectName("pageBody")
         self._service = service
         self._batch: AnalysisBatch | None = None
+        self._saved_batch_id: UUID | None = None
         self._row_peaks: list[tuple[Sample, Peak]] = []
         self._latest_areas: dict[UUID, int] = {}
 
@@ -162,14 +163,16 @@ class ExtractionReviewPage(QWidget):
         self.refresh_saved_batches()
 
     def refresh_saved_batches(self) -> None:
-        selected = self.saved_batches.currentData()
+        selected = self._saved_batch_id
         self.saved_batches.clear()
+        self.saved_batches.addItem("저장된 배치를 선택하세요", None)
         for summary in self._service.list_saved_batches():
             self.saved_batches.addItem(
                 f"{summary.batch_code}  ·  {summary.pdf_filename}  ·  "
                 f"{summary.analysis_no_start}-{summary.analysis_no_end}",
                 summary.batch_id,
             )
+        self.saved_batches.setCurrentIndex(0)
         if selected is not None:
             index = self.saved_batches.findData(selected)
             if index >= 0:
@@ -181,12 +184,16 @@ class ExtractionReviewPage(QWidget):
             QMessageBox.warning(self, "저장 배치 없음", "먼저 DB에 저장된 배치가 없습니다.")
             return
         try:
+            self._saved_batch_id = batch_id
             self.load_batch(self._service.load_saved_batch(batch_id))
         except Exception as exc:
             QMessageBox.critical(self, "배치 열기 실패", str(exc))
 
     def load_batch(self, batch: AnalysisBatch) -> None:
         self._batch = batch
+        if batch.review_status is not ReviewStatus.SAVED:
+            self._saved_batch_id = None
+            self.saved_batches.setCurrentIndex(0)
         self._latest_areas.clear()
         if batch.review_status is ReviewStatus.SAVED:
             for sample in batch.samples:
@@ -203,6 +210,19 @@ class ExtractionReviewPage(QWidget):
             + ("  ·  DB 저장 완료  ·  Excel 생성 가능" if saved else "")
         )
         set_status_tone(self.status, "success" if saved or not batch.warning_count else "warning")
+        self._sync_actions()
+
+    def reset_for_new_work(self, *_args) -> None:
+        self._batch = None
+        self._saved_batch_id = None
+        self._latest_areas.clear()
+        self._row_peaks.clear()
+        self.saved_batches.setCurrentIndex(0)
+        self.table.setRowCount(0)
+        self.filter.setCurrentIndex(0)
+        self.status.setText("새 PDF가 선택되었습니다. 새 추출 결과를 기다리고 있습니다.")
+        set_status_tone(self.status, "neutral")
+        self._update_summary()
         self._sync_actions()
 
     def _sync_actions(self) -> None:
@@ -338,6 +358,7 @@ class ExtractionReviewPage(QWidget):
             return
         try:
             result = self._service.save_batch(self._batch)
+            self._saved_batch_id = self._batch.batch_id
             self.batch_saved.emit(self._batch)
             self.status.setText(f"DB 저장 완료  ·  {result.batch_code}")
             set_status_tone(self.status, "success")

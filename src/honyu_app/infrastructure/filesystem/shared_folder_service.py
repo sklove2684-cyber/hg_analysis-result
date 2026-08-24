@@ -7,6 +7,7 @@ import re
 from honyu_app.domain.enums import HalfYear
 from honyu_app.domain.errors import SharedFolderUnavailableError
 from honyu_app.domain.results import FolderValidationResult, SharedFolderConnectionStatus
+from honyu_app.config.paths import default_local_export_dir
 
 
 def _natural_key(value: str) -> list[tuple[int, object]]:
@@ -17,9 +18,15 @@ def _natural_key(value: str) -> list[tuple[int, object]]:
 class WindowsSharedFolderService:
     """Read-only discovery of the company shared-folder hierarchy."""
 
-    def __init__(self, unc_base_path: str, z_fallback_path: str) -> None:
+    def __init__(
+        self,
+        unc_base_path: str,
+        z_fallback_path: str,
+        local_export_path: str | None = None,
+    ) -> None:
         self._unc_base_path = Path(unc_base_path)
         self._z_fallback_path = Path(z_fallback_path)
+        self._local_export_path = Path(local_export_path or default_local_export_dir())
         self._active_base_path: Path | None = None
 
     @property
@@ -42,20 +49,34 @@ class WindowsSharedFolderService:
                         used_fallback=used_fallback,
                         attempted_paths=tuple(attempted),
                         message=(
-                            "Z: 보조 경로로 연결했습니다."
+                            "회사 공유폴더 저장 · Z: 보조 경로"
                             if used_fallback
-                            else "UNC 공유폴더에 연결했습니다."
+                            else "회사 공유폴더 저장 · UNC 연결됨"
                         ),
+                        storage_mode="company",
                     )
             except OSError:
                 continue
-        self._active_base_path = None
+        try:
+            self._local_export_path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._active_base_path = None
+            return SharedFolderConnectionStatus(
+                connected=False,
+                active_base_path=None,
+                used_fallback=False,
+                attempted_paths=tuple(attempted),
+                message=f"로컬 저장 폴더를 준비할 수 없습니다: {exc}",
+                storage_mode="unavailable",
+            )
+        self._active_base_path = self._local_export_path
         return SharedFolderConnectionStatus(
             connected=False,
-            active_base_path=None,
+            active_base_path=str(self._local_export_path),
             used_fallback=False,
             attempted_paths=tuple(attempted),
-            message="공유폴더에 연결할 수 없습니다. Excel 저장 기능을 사용할 수 없습니다.",
+            message="로컬 저장 모드 · 회사 공유폴더에 연결할 수 없어 로컬에 저장합니다.",
+            storage_mode="local",
         )
 
     def _require_connection(self) -> Path:
@@ -122,4 +143,3 @@ class WindowsSharedFolderService:
     def _validate_year(year: int) -> None:
         if not 2000 <= year <= 2099:
             raise ValueError("연도는 2000~2099 범위여야 합니다.")
-

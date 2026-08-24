@@ -10,4 +10,16 @@ dist/
 .env
 *.log
 pending/
+.gui-deps/
+gui-deps2/
+runtime-data/
+outputs/
+work/*
+!work/regression_profiles.py
+*.pdf
+*.xlsx
+*.xls
+*.csv
+*.json
+*.txt
 

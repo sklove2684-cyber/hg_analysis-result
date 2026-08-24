@@ -14,6 +14,7 @@ from honyu_app.domain.results import SaveAnalysisBatchResult
 from honyu_app.domain.queries import BatchSearchQuery
 from honyu_app.domain.results import BatchSummary
 from honyu_app.infrastructure.pdf.material_normalizer import MaterialNormalizer
+from honyu_app.config.analysis_types import material_supported_for_analysis
 from honyu_app.services.database_service import DatabaseService
 
 
@@ -52,6 +53,9 @@ class ReviewExtractionService:
         elif standard_name == "CS2":
             peak.include_for_excel = False
             peak.exclude_reason = ExcludeReason.INTERNAL_STANDARD_CS2
+        elif not material_supported_for_analysis(batch.analysis_type, standard_name):
+            peak.include_for_excel = False
+            peak.exclude_reason = ExcludeReason.MATERIAL_NOT_SUPPORTED_FOR_ANALYSIS
         else:
             peak.include_for_excel = True
             peak.exclude_reason = None
@@ -67,6 +71,13 @@ class ReviewExtractionService:
                 raise ValidationError("표준 물질명이 없는 Peak는 포함할 수 없습니다.")
             if peak.material_standard == "CS2":
                 raise ValidationError("CS2는 Excel 입력에 포함할 수 없습니다.")
+            if not material_supported_for_analysis(
+                batch.analysis_type, peak.material_standard
+            ):
+                raise ValidationError(
+                    f"현재 분석종류({batch.analysis_type})에서 지원하지 않는 물질은 "
+                    "Excel 입력에 포함할 수 없습니다."
+                )
             peak.include_for_excel = True
             peak.exclude_reason = None
         else:

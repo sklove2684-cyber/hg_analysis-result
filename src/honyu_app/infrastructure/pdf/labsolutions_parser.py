@@ -17,6 +17,10 @@ from honyu_app.domain.enums import (
 )
 from honyu_app.domain.errors import ExtractionCancelledError, ValidationError
 from honyu_app.domain.models import AnalysisBatch, Peak, Sample, SourceFile
+from honyu_app.config.analysis_types import (
+    runtime_material_inference_allowed_for,
+    supported_canonical_names_for,
+)
 from honyu_app.infrastructure.pdf.material_normalizer import MaterialNormalizer
 
 
@@ -46,7 +50,9 @@ class LabSolutionsParser:
         file_bytes = pdf_path.read_bytes()
         file_hash = hashlib.sha256(file_bytes).hexdigest()
         samples: list[Sample] = []
-        warning_count = 0
+        # An empty supported-material list means "nothing is eligible yet", not
+        # "allow every canonical known by the global normalizer".
+        allowed_materials = set(supported_canonical_names_for(analysis_type)) | {"CS2"}
         with pdfplumber.open(pdf_path) as pdf:
             total_pages = len(pdf.pages)
             for page_no, page in enumerate(pdf.pages, 1):
@@ -56,7 +62,9 @@ class LabSolutionsParser:
                 table = self._find_peak_table(page.extract_tables(), page_no)
                 if self._field(text, "Sample Name"):
                     metadata = self._extract_metadata(text, page_no)
-                    sample = self._build_sample(page_no, metadata, table)
+                    sample = self._build_sample(
+                        page_no, metadata, table, allowed_materials
+                    )
                     samples.append(sample)
                     added_peaks = sample.peaks
                 else:
@@ -66,15 +74,22 @@ class LabSolutionsParser:
                             "원본 Sample 페이지가 없습니다."
                         )
                     added_peaks = self._append_continuation_page(
-                        samples[-1], page_no, table
+                        samples[-1], page_no, table, allowed_materials
                     )
-                warning_count += sum(
-                    peak.exclude_reason is ExcludeReason.UNKNOWN_MATERIAL
-                    for peak in added_peaks
-                )
                 if progress_callback:
                     progress_callback(page_no, total_pages)
             page_count = total_pages
+        inferred_aliases = self._infer_session_material_aliases(analysis_type, samples)
+        if inferred_aliases:
+            allowed_materials = set(inferred_aliases.values()) | {"CS2"}
+            self._apply_session_material_aliases(
+                samples, inferred_aliases, allowed_materials
+            )
+        warning_count = sum(
+            peak.exclude_reason is ExcludeReason.UNKNOWN_MATERIAL
+            for sample in samples
+            for peak in sample.peaks
+        )
         source = SourceFile(
             original_name=pdf_path.name,
             full_path=pdf_path.resolve(),
@@ -100,6 +115,72 @@ class LabSolutionsParser:
             warning_count=warning_count,
             review_status=ReviewStatus.PENDING,
         )
+
+    @staticmethod
+    def _material_key(value: str) -> str:
+        return re.sub(r"\s+", "", value).casefold()
+
+    def _infer_session_material_aliases(
+        self, analysis_type: str, samples: list[Sample]
+    ) -> dict[str, str]:
+        """Infer only an exact, repeated single-material match for this parse run.
+
+        This intentionally does not persist aliases or guess abbreviations. Complex
+        pending analyses therefore remain unresolved until their registry is defined.
+        """
+        if not runtime_material_inference_allowed_for(analysis_type):
+            return {}
+        analysis_key = self._material_key(analysis_type)
+        std_samples_by_raw: dict[str, set[int]] = {}
+        recovery_samples_by_raw: dict[str, set[int]] = {}
+        for sample in samples:
+            if sample.sample_type not in {SampleType.STD, SampleType.RECOVERY}:
+                continue
+            target = (
+                std_samples_by_raw
+                if sample.sample_type is SampleType.STD
+                else recovery_samples_by_raw
+            )
+            for peak in sample.peaks:
+                if not peak.material_raw or peak.material_standard is not None:
+                    continue
+                raw_key = self._material_key(peak.material_raw)
+                target.setdefault(raw_key, set()).add(sample.page_no)
+
+        exact = [
+            raw_key
+            for raw_key, pages in std_samples_by_raw.items()
+            if raw_key == analysis_key and len(pages) >= 2
+        ]
+        if len(exact) != 1:
+            return {}
+        raw_key = exact[0]
+        # Recovery confirmation strengthens the evidence when present, but is not
+        # mandatory because some valid single-material reports contain only STD.
+        _ = recovery_samples_by_raw.get(raw_key, set())
+        return {raw_key: analysis_type}
+
+    def _apply_session_material_aliases(
+        self,
+        samples: list[Sample],
+        aliases: dict[str, str],
+        allowed_materials: set[str],
+    ) -> None:
+        for sample in samples:
+            for peak in sample.peaks:
+                if peak.material_raw:
+                    inferred = aliases.get(self._material_key(peak.material_raw))
+                    if inferred is not None:
+                        peak.material_standard = inferred
+                reason = self._exclude_reason(
+                    sample.sample_name_raw,
+                    sample.sample_type,
+                    peak.material_raw,
+                    peak.material_standard,
+                    allowed_materials,
+                )
+                peak.exclude_reason = reason
+                peak.include_for_excel = reason is None
 
     @staticmethod
     def extract_analysis_range(filename: str) -> tuple[int, int] | None:
@@ -168,11 +249,17 @@ class LabSolutionsParser:
         raise ValidationError(f"PDF {page_no}페이지: 8열 Peak Table을 찾을 수 없습니다.")
 
     def _build_sample(
-        self, page_no: int, metadata: dict[str, object], rows: list[list[str | None]]
+        self,
+        page_no: int,
+        metadata: dict[str, object],
+        rows: list[list[str | None]],
+        allowed_materials: set[str] | None,
     ) -> Sample:
         raw_name = str(metadata["sample_name"])
         sample_type, level, replicate, worker_key, is_blank = self._classify_sample(raw_name)
-        peaks = self._build_peaks(page_no, raw_name, sample_type, rows)
+        peaks = self._build_peaks(
+            page_no, raw_name, sample_type, rows, allowed_materials=allowed_materials
+        )
         return Sample(
             page_no=page_no,
             sample_name_raw=raw_name,
@@ -194,6 +281,7 @@ class LabSolutionsParser:
         sample: Sample,
         page_no: int,
         rows: list[list[str | None]],
+        allowed_materials: set[str] | None,
     ) -> list[Peak]:
         existing_peak_numbers = {peak.peak_no for peak in sample.peaks}
         added = self._build_peaks(
@@ -201,6 +289,7 @@ class LabSolutionsParser:
             sample.sample_name_raw,
             sample.sample_type,
             rows,
+            allowed_materials=allowed_materials,
             dibk_group_start=sum(
                 peak.material_standard == "DIBK" for peak in sample.peaks
             ),
@@ -223,6 +312,7 @@ class LabSolutionsParser:
         sample_type: SampleType,
         rows: list[list[str | None]],
         *,
+        allowed_materials: set[str] | None = None,
         dibk_group_start: int = 0,
     ) -> list[Peak]:
         peaks: list[Peak] = []
@@ -234,7 +324,13 @@ class LabSolutionsParser:
                 )
             raw_material = (row[7] or "").strip() or None
             standard = self._normalizer.normalize(raw_material)
-            reason = self._exclude_reason(raw_name, sample_type, raw_material, standard)
+            reason = self._exclude_reason(
+                raw_name,
+                sample_type,
+                raw_material,
+                standard,
+                allowed_materials,
+            )
             if standard == "DIBK":
                 dibk_group += 1
                 group_no = dibk_group
@@ -294,6 +390,7 @@ class LabSolutionsParser:
         sample_type: SampleType,
         raw_material: str | None,
         standard: str | None,
+        allowed_materials: set[str] | None = None,
     ) -> ExcludeReason | None:
         if sample_type is SampleType.BLANK:
             return ExcludeReason.BLANK_SAMPLE
@@ -307,4 +404,6 @@ class LabSolutionsParser:
             return ExcludeReason.UNKNOWN_MATERIAL
         if standard == "CS2":
             return ExcludeReason.INTERNAL_STANDARD_CS2
+        if allowed_materials is not None and standard not in allowed_materials:
+            return ExcludeReason.MATERIAL_NOT_SUPPORTED_FOR_ANALYSIS
         return None

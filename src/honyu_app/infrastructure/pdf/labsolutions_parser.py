@@ -26,7 +26,7 @@ from honyu_app.infrastructure.pdf.material_normalizer import MaterialNormalizer
 
 class LabSolutionsParser:
     name = "labsolutions-pdfplumber"
-    version = "1.0.0"
+    version = "1.1.0"
     layout_id = "labsolutions-analysis-report-8col-v1"
 
     def __init__(self, normalizer: MaterialNormalizer | None = None) -> None:
@@ -59,8 +59,17 @@ class LabSolutionsParser:
                 if cancel_check and cancel_check():
                     raise ExtractionCancelledError("PDF 추출이 취소되었습니다.")
                 text = page.extract_text() or ""
-                table = self._find_peak_table(page.extract_tables(), page_no)
-                if self._field(text, "Sample Name"):
+                sample_name = self._field(text, "Sample Name")
+                has_sample_information = bool(
+                    re.search(r"<\s*Sample Information\s*>", text, re.IGNORECASE)
+                )
+                is_new_sample_page = sample_name is not None or has_sample_information
+                table = self._find_peak_table(
+                    page.extract_tables(),
+                    page_no,
+                    allow_continuation=is_new_sample_page is False,
+                )
+                if is_new_sample_page:
                     metadata = self._extract_metadata(text, page_no)
                     sample = self._build_sample(
                         page_no, metadata, table, allowed_materials
@@ -230,23 +239,57 @@ class LabSolutionsParser:
         base = datetime.strptime(day, "%Y-%m-%d")
         return base.replace(hour=hour, minute=int(minute), second=int(second))
 
-    @staticmethod
-    def _find_peak_table(tables: list[list[list[str | None]]], page_no: int) -> list[list[str | None]]:
+    @classmethod
+    def _find_peak_table(
+        cls,
+        tables: list[list[list[str | None]]],
+        page_no: int,
+        *,
+        allow_continuation: bool = False,
+    ) -> list[list[str | None]]:
         expected = ["Peak#", "Ret. Time", "Area", "Height", "Conc.", "Unit", "Mark", "Name"]
         for table in tables:
             for index, row in enumerate(table):
                 normalized = [(cell or "").strip() for cell in row]
                 if normalized == expected:
-                    rows: list[list[str | None]] = []
-                    for candidate in table[index + 1 :]:
-                        first = (candidate[0] or "").strip() if candidate else ""
-                        if first == "Total":
-                            break
-                        if first.isdigit():
-                            rows.append(candidate)
-                    if rows:
+                    rows, saw_total = cls._continuation_peak_rows(
+                        table[index + 1 :]
+                    )
+                    if rows or (allow_continuation and saw_total):
                         return rows
+            if allow_continuation:
+                rows, saw_total = cls._continuation_peak_rows(table)
+                if rows or saw_total:
+                    return rows
         raise ValidationError(f"PDF {page_no}페이지: 8열 Peak Table을 찾을 수 없습니다.")
+
+    @classmethod
+    def _continuation_peak_rows(
+        cls, rows: list[list[str | None]]
+    ) -> tuple[list[list[str | None]], bool]:
+        peaks: list[list[str | None]] = []
+        saw_total = False
+        for candidate in rows:
+            first = (candidate[0] or "").strip() if candidate else ""
+            if first.casefold() == "total":
+                saw_total = True
+                break
+            if cls._looks_like_peak_row(candidate):
+                peaks.append(candidate)
+        return peaks, saw_total
+
+    @staticmethod
+    def _looks_like_peak_row(row: list[str | None]) -> bool:
+        if len(row) != 8:
+            return False
+        try:
+            int((row[0] or "").strip())
+            Decimal((row[1] or "").strip())
+            int((row[2] or "").replace(",", "").strip())
+            int((row[3] or "").replace(",", "").strip())
+        except (ValueError, InvalidOperation):
+            return False
+        return True
 
     def _build_sample(
         self,

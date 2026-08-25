@@ -42,6 +42,17 @@ ALCOHOL_XLSX = (
     / "TEST"
     / "(알콜2) 74-119.xlsx"
 )
+HONYU_120_167_PDF = next(
+    (
+        path
+        for path in (
+            Path(__file__).resolve().parents[3] / "TEST" / "혼유 120-167.pdf",
+            Path(__file__).resolve().parents[3] / "TEST" / "혼유 120-167 병합.pdf",
+        )
+        if path.is_file()
+    ),
+    Path(__file__).resolve().parents[3] / "TEST" / "혼유 120-167.pdf",
+)
 
 
 @unittest.skipUnless(SAMPLE_PDF.is_file(), f"샘플 PDF 없음: {SAMPLE_PDF}")
@@ -188,6 +199,80 @@ class LabSolutionsSamplePdfRegressionTests(unittest.TestCase):
 
 
 @unittest.skipUnless(
+    HONYU_120_167_PDF.is_file(),
+    f"혼유 120-167 PDF 없음: {HONYU_120_167_PDF}",
+)
+class Honyu120167ContinuationRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.batch = LabSolutionsParser().parse(
+            HONYU_120_167_PDF,
+            analysis_type="혼유",
+            analysis_no_start=120,
+            analysis_no_end=167,
+        )
+
+    def test_samples_two_and_three_merge_their_continuation_pages(self) -> None:
+        sample_two = [
+            sample for sample in self.batch.samples
+            if sample.sample_name_normalized == "2"
+        ]
+        sample_three = [
+            sample for sample in self.batch.samples
+            if sample.sample_name_normalized == "3"
+        ]
+
+        self.assertEqual(len(sample_two), 1)
+        self.assertEqual(len(sample_three), 1)
+        self.assertEqual({peak.source_page for peak in sample_two[0].peaks}, {39, 40})
+        self.assertEqual({peak.source_page for peak in sample_three[0].peaks}, {41, 42})
+        self.assertEqual(
+            [sample_two[0].peaks[0].peak_no, sample_two[0].peaks[-1].peak_no],
+            [1, 82],
+        )
+        self.assertEqual(
+            [sample_three[0].peaks[0].peak_no, sample_three[0].peaks[-1].peak_no],
+            [1, 65],
+        )
+
+    def test_sample_126_is_single_and_126b_remains_a_separate_blank(self) -> None:
+        sample_126 = [
+            sample for sample in self.batch.samples
+            if sample.sample_name_normalized == "126"
+        ]
+        sample_126b = [
+            sample for sample in self.batch.samples
+            if sample.sample_name_normalized == "126B"
+        ]
+
+        self.assertEqual(len(sample_126), 1)
+        self.assertEqual(len(sample_126b), 1)
+        self.assertEqual(sample_126[0].page_no, 36)
+        self.assertEqual(sample_126b[0].page_no, 37)
+        self.assertEqual(sample_126b[0].sample_type, SampleType.RECOVERY_BLANK)
+
+    def test_continuation_pages_are_not_saved_as_separate_samples(self) -> None:
+        batch = deepcopy(self.batch)
+        with TemporaryDirectory() as temp:
+            database = MockDatabaseService(Path(temp) / "continuation.db")
+            ReviewExtractionService.complete_review(batch)
+            saved = ReviewExtractionService(database).save_batch(batch)
+            loaded = database.get_batch_detail(saved.batch_id)
+
+        self.assertEqual(len(loaded.samples), len(self.batch.samples))
+        self.assertEqual(
+            len([s for s in loaded.samples if s.sample_name_normalized == "2"]),
+            1,
+        )
+        self.assertEqual(
+            len([s for s in loaded.samples if s.sample_name_normalized == "3"]),
+            1,
+        )
+        self.assertNotIn(40, {sample.page_no for sample in loaded.samples})
+        self.assertNotIn(42, {sample.page_no for sample in loaded.samples})
+
+
+@unittest.skipUnless(
     ONE_COLUMN_PDF.is_file() and ONE_COLUMN_XLSX.is_file(),
     "1컬럼 PDF 또는 Excel 양식이 없습니다.",
 )
@@ -196,7 +281,7 @@ class OneColumnSampleRegressionTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.batch = LabSolutionsParser().parse(
             ONE_COLUMN_PDF,
-            analysis_type="혼유",
+            analysis_type="1컬럼혼유",
             analysis_no_start=39,
             analysis_no_end=73,
         )
@@ -255,7 +340,7 @@ class LabSolutionsContinuationPageRegressionTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.batch = LabSolutionsParser().parse(
             ALCOHOL_CONTINUATION_PDF,
-            analysis_type="알콜",
+            analysis_type="(알콜2) IBA,1-BTOH",
             analysis_no_start=74,
             analysis_no_end=119,
         )

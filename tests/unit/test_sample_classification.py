@@ -2,6 +2,7 @@ import unittest
 from decimal import Decimal
 
 from honyu_app.domain.enums import ConcentrationLevel, ExcludeReason, SampleType
+from honyu_app.domain.errors import ValidationError
 from honyu_app.domain.models import Peak, Sample
 from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
 
@@ -39,6 +40,35 @@ class SampleClassificationTests(unittest.TestCase):
         sample_type, _, _, _, is_blank = self.parser._classify_sample("회수율-B")
         self.assertEqual(sample_type, SampleType.RECOVERY_BLANK)
         self.assertTrue(is_blank)
+
+    def test_total_only_table_is_accepted_only_as_a_continuation(self) -> None:
+        total_only = [
+            [["Total", None, "5394472", "1348209", None, None, None, None]]
+        ]
+
+        self.assertEqual(
+            self.parser._find_peak_table(
+                total_only, 40, allow_continuation=True
+            ),
+            [],
+        )
+        with self.assertRaisesRegex(ValidationError, "Peak Table"):
+            self.parser._find_peak_table(total_only, 40)
+
+    def test_headerless_peak_rows_are_accepted_as_a_continuation(self) -> None:
+        continuation = [
+            [
+                ["27", "5.582", "2272", "442", "0.000", None, "TV", None],
+                ["28", "5.721", "5125", "1753", "0.000", "ppm", "TV", "MIBK"],
+                ["Total", None, "5394472", "1348209", None, None, None, None],
+            ]
+        ]
+
+        rows = self.parser._find_peak_table(
+            continuation, 40, allow_continuation=True
+        )
+
+        self.assertEqual([row[0] for row in rows], ["27", "28"])
 
     @staticmethod
     def _named_sample(page: int, name: str, sample_type: SampleType, material: str) -> Sample:

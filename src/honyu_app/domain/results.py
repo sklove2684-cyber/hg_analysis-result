@@ -63,6 +63,7 @@ class SharedFolderConnectionStatus:
     used_fallback: bool
     attempted_paths: tuple[str, ...]
     message: str
+    storage_mode: str
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,6 +6,7 @@ from honyu_app.config.analysis_types import (
     G2_SUPPORTED_MATERIALS,
     analysis_type_display_name,
     analysis_type_key,
+    excel_profile_key_for,
     has_excel_profile,
     infer_analysis_type,
     materials_pending_for,
@@ -169,6 +170,7 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
             "ACN",
             "에틸렌글리콜",
             "B.C",
+            "디에틸에테르",
         ):
             self.assertTrue(has_excel_profile(name), name)
         for name in (
@@ -183,6 +185,7 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
                 "ACN",
                 "에틸렌글리콜",
                 "B.C",
+                "디에틸에테르",
             }
         ):
             self.assertFalse(has_excel_profile(name), name)
@@ -199,6 +202,9 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
         for display_name, key in mappings.items():
             self.assertEqual(analysis_type_key(display_name), key)
             self.assertEqual(analysis_type_display_name(key), display_name)
+
+    def test_diethyl_ether_uses_dedicated_excel_profile_key(self) -> None:
+        self.assertEqual(excel_profile_key_for("디에틸에테르"), "diethyl_ether")
 
     def test_specific_detection_precedes_broad_family_detection(self) -> None:
         self.assertEqual(infer_analysis_type("알콜4 1-10.pdf"), "알콜4")

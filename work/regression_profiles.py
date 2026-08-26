@@ -93,6 +93,13 @@ cases = (
         570,
         588,
     ),
+    (
+        "디에틸에테르",
+        Path(r"C:\Users\양세경\Desktop\분석프로그램\디에틸에테르 152,153@완료.pdf"),
+        Path(r"C:\Users\양세경\Desktop\분석프로그램\(디에틸에테르) 152,153.xlsx"),
+        152,
+        153,
+    ),
 )
 
 for analysis_type, pdf, xlsx, start, end in cases:

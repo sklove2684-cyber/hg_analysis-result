@@ -147,7 +147,12 @@ ANALYSIS_TYPES: tuple[AnalysisTypeDefinition, ...] = (
         "1,2-에폭시프로판(산화프로필렌)",
         PROPYLENE_OXIDE_MATERIALS,
     ),
-    AnalysisTypeDefinition("diethyl_ether", "디에틸에테르", DIETHYL_ETHER_MATERIALS),
+    AnalysisTypeDefinition(
+        "diethyl_ether",
+        "디에틸에테르",
+        DIETHYL_ETHER_MATERIALS,
+        "diethyl_ether",
+    ),
     AnalysisTypeDefinition("thf_diethylene_oxide", "THF(Diethylene oxide)", materials_pending=True),
     AnalysisTypeDefinition(
         "pce", "PCE(테트라클로로에틸렌)", (TETRACHLOROETHYLENE_MATERIAL,)
@@ -295,6 +300,11 @@ def runtime_material_inference_allowed_for(analysis_type: str) -> bool:
 def has_excel_profile(analysis_type: str) -> bool:
     definition = _BY_NAME.get(analysis_type)
     return bool(definition and definition.excel_profile_key)
+
+
+def excel_profile_key_for(analysis_type: str) -> str | None:
+    definition = _BY_NAME.get(analysis_type)
+    return definition.excel_profile_key if definition else None
 
 
 def infer_analysis_type(

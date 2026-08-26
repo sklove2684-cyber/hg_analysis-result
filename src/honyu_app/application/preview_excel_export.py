@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from uuid import UUID
 
-from honyu_app.config.analysis_types import has_excel_profile
+from honyu_app.config.analysis_types import excel_profile_key_for, has_excel_profile
 from honyu_app.application.sample_number_matching import (
     SampleNumberDecision,
     classify_sample_number,
@@ -68,6 +68,7 @@ LEGACY_RECOVERY_ROW_START = {
 
 @dataclass(frozen=True)
 class TemplateProfile:
+    key: str
     name: str
     required_sheets: tuple[str, ...]
     area_sheet: str
@@ -80,9 +81,11 @@ class TemplateProfile:
     worker_row_end: int
     dibk_std_slots: tuple[str, ...] = ()
     dibk_recovery_slots: tuple[str, ...] = ()
+    std_replicates_override: tuple[int, ...] = ()
 
 
 LEGACY_PROFILE = TemplateProfile(
+    key="mixture",
     name="혼유",
     required_sheets=("검량선", "area", "최종결과", "회수율", "STD제조"),
     area_sheet="area",
@@ -98,6 +101,7 @@ LEGACY_PROFILE = TemplateProfile(
 )
 
 ONE_COLUMN_PROFILE = TemplateProfile(
+    key="mixture_one_column",
     name="1컬럼혼유",
     required_sheets=("검량선", "area입력", "회수율", "STD제조"),
     area_sheet="area입력",
@@ -130,6 +134,7 @@ ONE_COLUMN_PROFILE = TemplateProfile(
 )
 
 ALCOHOL_PROFILE = TemplateProfile(
+    key="alcohol_2",
     name="알콜",
     required_sheets=("검량선", "area입력", "회수율", "STD제조"),
     area_sheet="area입력",
@@ -156,6 +161,7 @@ ALCOHOL_PROFILE = TemplateProfile(
 )
 
 MEK_PROFILE = TemplateProfile(
+    key="mek",
     name="MEK",
     required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
     area_sheet="LOD(area입력)",
@@ -173,6 +179,7 @@ MEK_PROFILE = TemplateProfile(
 )
 
 ACETIC_ACID_PROFILE = TemplateProfile(
+    key="acetic_acid",
     name="초산",
     required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
     area_sheet="LOD(area입력)",
@@ -190,6 +197,7 @@ ACETIC_ACID_PROFILE = TemplateProfile(
 )
 
 ETHYLENE_GLYCOL_PROFILE = TemplateProfile(
+    key="ethylene_glycol",
     name="에틸렌글리콜",
     required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
     area_sheet="LOD(area입력)",
@@ -206,7 +214,30 @@ ETHYLENE_GLYCOL_PROFILE = TemplateProfile(
     worker_row_end=40,
 )
 
+DIETHYL_ETHER_PROFILE = TemplateProfile(
+    key="diethyl_ether",
+    name="디에틸에테르",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"Diethyl ether": "F"},
+    numeric_columns={"Diethyl ether": "F"},
+    recovery_columns={"Diethyl ether": "B"},
+    std_row_start=4,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=19,
+    worker_row_end=122,
+    # The source PDF has six named STD injections, while the workbook has five
+    # non-zero calibration levels. STD2 and STD3 represent the same level; the
+    # approved template levels correspond to source STD1, STD2, STD4, STD5, STD6.
+    std_replicates_override=(1, 2, 4, 5, 6),
+)
+
 ACN_PROFILE = TemplateProfile(
+    key="acn",
     name="ACN",
     required_sheets=("검량선", "결과입력(area입력)", "회수율", "STD제조"),
     area_sheet="결과입력(area입력)",
@@ -224,6 +255,7 @@ ACN_PROFILE = TemplateProfile(
 )
 
 BC_PROFILE = TemplateProfile(
+    key="bc",
     name="B.C",
     required_sheets=("검량선", "결과입력(area입력)", "회수율", "STD제조"),
     area_sheet="결과입력(area입력)",
@@ -241,6 +273,7 @@ BC_PROFILE = TemplateProfile(
 )
 
 G2_PROFILE = TemplateProfile(
+    key="mixture_g2",
     name="(혼유-G2) THF,CFM,벤젠,클로로벤젠",
     required_sheets=("검량선", "area입력", "회수율", "STD제조"),
     area_sheet="area입력",
@@ -273,6 +306,7 @@ G2_PROFILE = TemplateProfile(
 )
 
 ISOAMYL_N_PROPYL_ACETATE_PROFILE = TemplateProfile(
+    key="isoamyl_n_propyl_acetate",
     name="이소아밀,n-프로필 아세테이트",
     required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
     area_sheet="LOD(area입력)",
@@ -299,6 +333,7 @@ ISOAMYL_N_PROPYL_ACETATE_PROFILE = TemplateProfile(
 )
 
 CELLOSOLVE_PROFILE = TemplateProfile(
+    key="cellosolve",
     name="셀로솔브",
     required_sheets=("검량선", "area입력", "회수율", "STD제조"),
     area_sheet="area입력",
@@ -331,6 +366,7 @@ CELLOSOLVE_PROFILE = TemplateProfile(
 )
 
 G3_PROFILE = TemplateProfile(
+    key="mixture_g3",
     name="(혼유-G3) 1,2-디클로로에틸렌,퍼클로로에틸렌,프로판,에탄",
     required_sheets=("검량선", "area입력", "회수율", "STD제조"),
     area_sheet="area입력",
@@ -386,6 +422,9 @@ ACETIC_ACID_TARGET_RETENTION_TIMES = {
 }
 ETHYLENE_GLYCOL_TARGET_RETENTION_TIMES = {
     "Ethylene glycol": Decimal("3.389"),
+}
+DIETHYL_ETHER_TARGET_RETENTION_TIMES = {
+    "Diethyl ether": Decimal("1.305"),
 }
 ACN_TARGET_RETENTION_TIMES = {
     "Acetonitrile": Decimal("2.031"),
@@ -461,6 +500,17 @@ class PreviewExcelExportService:
         profile = self._template_profile(snapshot, result)
         if profile is None:
             return result
+        expected_profile_key = excel_profile_key_for(batch.analysis_type)
+        if expected_profile_key != profile.key:
+            result.issues.append(
+                ExcelPreviewIssue(
+                    ValidationSeverity.ERROR,
+                    "TEMPLATE_PROFILE_MISMATCH",
+                    f"분석종류 '{batch.analysis_type}'에 맞는 Excel 양식이 아닙니다. "
+                    f"선택된 파일은 '{profile.name}' 양식으로 확인됐습니다.",
+                )
+            )
+            return result
         worker_rows = self._worker_row_index(snapshot, profile)
         target_analysis_numbers = set(worker_rows)
         if batch.analysis_no_start <= batch.analysis_no_end:
@@ -505,13 +555,14 @@ class PreviewExcelExportService:
         profile: TemplateProfile,
         result: ExcelPreviewResult,
     ) -> set[UUID]:
-        """Select one complete, contiguous STD run for the legacy 혼유 template.
+        """Select one complete STD run when a profile can contain recheck sets.
 
-        Other template profiles retain their established mapping behaviour.  A
-        single isolated STD is also left alone so focused review/test batches do
-        not become invalid merely because the rest of the PDF is absent.
+        혼유 and 디에틸에테르 source PDFs can contain a complete calibration run
+        followed by partial recheck standards. Other profiles retain their
+        established behaviour. A single isolated STD is left alone so focused
+        review/test batches remain valid.
         """
-        if profile != LEGACY_PROFILE:
+        if profile not in (LEGACY_PROFILE, DIETHYL_ETHER_PROFILE):
             return set()
 
         std_samples = [sample for sample in samples if sample.sample_type is SampleType.STD]
@@ -612,6 +663,8 @@ class PreviewExcelExportService:
                 profile = ACETIC_ACID_PROFILE
             elif acetic_header == "ethylene glycol":
                 profile = ETHYLENE_GLYCOL_PROFILE
+            elif acetic_header == "diethyl ether":
+                profile = DIETHYL_ETHER_PROFILE
             elif lod_headers == ("isoamyl acetate", "n-propyl acetae"):
                 profile = ISOAMYL_N_PROPYL_ACETATE_PROFILE
             else:
@@ -833,6 +886,8 @@ class PreviewExcelExportService:
                 target_rt = ACETIC_ACID_TARGET_RETENTION_TIMES.get(material)
             elif profile == ETHYLENE_GLYCOL_PROFILE:
                 target_rt = ETHYLENE_GLYCOL_TARGET_RETENTION_TIMES.get(material)
+            elif profile == DIETHYL_ETHER_PROFILE:
+                target_rt = DIETHYL_ETHER_TARGET_RETENTION_TIMES.get(material)
             elif profile == ACN_PROFILE:
                 target_rt = ACN_TARGET_RETENTION_TIMES.get(material)
             elif profile == BC_PROFILE:
@@ -995,6 +1050,8 @@ class PreviewExcelExportService:
     def _std_replicates(
         profile: TemplateProfile, method: StdMethod
     ) -> tuple[int, ...]:
+        if profile.std_replicates_override:
+            return profile.std_replicates_override
         return (
             (1, 2, 3, 4, 5)
             if profile in (MEK_PROFILE, ETHYLENE_GLYCOL_PROFILE, BC_PROFILE)

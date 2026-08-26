@@ -9,6 +9,7 @@ from honyu_app.application.preview_excel_export import (
     ACETIC_ACID_PROFILE,
     BC_PROFILE,
     CELLOSOLVE_PROFILE,
+    DIETHYL_ETHER_PROFILE,
     ETHYLENE_GLYCOL_PROFILE,
     G2_PROFILE,
     G3_PROFILE,
@@ -117,6 +118,19 @@ def ethylene_glycol_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
     )
 
 
+def diethyl_ether_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
+    headers = (
+        TemplateCell("LOD(area입력)", "E2", True, "Diethyl ether", "string"),
+        TemplateCell("LOD(area입력)", "A19", True, "262-152", "string"),
+        TemplateCell("LOD(area입력)", "A20", True, "262-153", "string"),
+    )
+    return ExcelTemplateSnapshot(
+        Path("diethyl-ether-template.xlsx"),
+        MEK_SHEETS,
+        {(cell.sheet, cell.address): cell for cell in (*headers, *cells)},
+    )
+
+
 def acn_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
     headers = (
         TemplateCell("결과입력(area입력)", "F2", True, "Acetonitrile", "string"),
@@ -212,11 +226,11 @@ def peak(number: int, area: int, material: str = "n-hexane") -> Peak:
     )
 
 
-def batch(samples: list[Sample]) -> AnalysisBatch:
+def batch(samples: list[Sample], analysis_type: str = "혼유") -> AnalysisBatch:
     return AnalysisBatch(
         batch_code="BATCH-PREVIEW",
         source_file=SourceFile("sample.pdf", Path("sample.pdf"), "a" * 64, 100, 1),
-        analysis_type="혼유",
+        analysis_type=analysis_type,
         analysis_no_start=1,
         analysis_no_end=10,
         parser_name="test",
@@ -345,6 +359,139 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertEqual(std6.status, ExcelPreviewStatus.EXCLUDED)
         self.assertEqual(std6.exclude_reason, "STD_METHOD_A_NOT_SELECTED")
 
+    def test_diethyl_ether_profile_maps_confirmed_std_recovery_and_worker_cells(self) -> None:
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[Peak(
+                    1,
+                    Decimal("1.305"),
+                    repeat * 100,
+                    material_raw="디에틸에테르",
+                    material_standard="Diethyl ether",
+                )],
+            )
+            for repeat in range(1, 7)
+        ]
+        samples = [
+            *standards,
+            Sample(
+                7,
+                "저1",
+                "저1",
+                SampleType.RECOVERY,
+                concentration_level=ConcentrationLevel.LOW,
+                replicate_no=1,
+                peaks=[peak(1, 700, "Diethyl ether")],
+            ),
+            Sample(
+                8,
+                "중2",
+                "중2",
+                SampleType.RECOVERY,
+                concentration_level=ConcentrationLevel.MID,
+                replicate_no=2,
+                peaks=[peak(1, 800, "Diethyl ether")],
+            ),
+            Sample(
+                9,
+                "고3",
+                "고3",
+                SampleType.RECOVERY,
+                concentration_level=ConcentrationLevel.HIGH,
+                replicate_no=3,
+                peaks=[peak(1, 900, "Diethyl ether")],
+            ),
+            Sample(
+                10,
+                "152-사업장",
+                "152-사업장",
+                SampleType.NUMERIC,
+                worker_match_key="152",
+                peaks=[peak(1, 1000, "Diethyl ether")],
+            ),
+            Sample(
+                11,
+                "153",
+                "153",
+                SampleType.NUMERIC,
+                worker_match_key="153",
+                peaks=[peak(1, 1100, "Diethyl ether")],
+            ),
+            Sample(
+                12,
+                "STD2",
+                "STD2",
+                SampleType.STD,
+                replicate_no=2,
+                peaks=[peak(1, 1200, "Diethyl ether")],
+            ),
+        ]
+
+        result = self.service(diethyl_ether_snapshot()).preview_batch(
+            batch(samples, "디에틸에테르"), Path("diethyl-ether-template.xlsx"), "A"
+        )
+        mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
+
+        self.assertTrue(result.can_generate, result.issues)
+        self.assertEqual(
+            [(row.sample_name, row.target_sheet, row.target_cell) for row in mapped],
+            [
+                ("STD1", "LOD(area입력)", "F4"),
+                ("STD2", "LOD(area입력)", "F5"),
+                ("STD4", "LOD(area입력)", "F6"),
+                ("STD5", "LOD(area입력)", "F7"),
+                ("STD6", "LOD(area입력)", "F8"),
+                ("저1", "회수율", "B28"),
+                ("중2", "회수율", "B32"),
+                ("고3", "회수율", "B36"),
+                ("152-사업장", "LOD(area입력)", "F19"),
+                ("153", "LOD(area입력)", "F20"),
+            ],
+        )
+        std3 = next(row for row in result.rows if row.sample_name == "STD3")
+        self.assertEqual(std3.status, ExcelPreviewStatus.EXCLUDED)
+        trailing = next(
+            row
+            for row in result.rows
+            if row.sample_name == "STD2" and row.applied_area == 1200
+        )
+        self.assertEqual(trailing.exclude_reason, ExcludeReason.DUPLICATE_STD_SET.value)
+
+    def test_diethyl_ether_selects_peak_closest_to_confirmed_std_rt(self) -> None:
+        worker = Sample(
+            1,
+            "152",
+            "152",
+            SampleType.NUMERIC,
+            worker_match_key="152",
+            peaks=[
+                Peak(1, Decimal("1.305"), 123, material_standard="Diethyl ether"),
+                Peak(2, Decimal("1.410"), 9999, material_standard="Diethyl ether"),
+            ],
+        )
+        result = self.service(diethyl_ether_snapshot()).preview_batch(
+            batch([worker], "디에틸에테르"), Path("diethyl-ether-template.xlsx"), "A"
+        )
+        mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
+
+        self.assertEqual([(row.peak_no, row.target_cell) for row in mapped], [(1, "F19")])
+
+    def test_diethyl_ether_rejects_mixture_workbook_with_clear_mismatch(self) -> None:
+        source = batch([], "디에틸에테르")
+        result = self.service(snapshot()).preview_batch(
+            source, Path("mixture-template.xlsx"), "A"
+        )
+
+        self.assertFalse(result.can_generate)
+        self.assertEqual(result.issues[0].code, "TEMPLATE_PROFILE_MISMATCH")
+        self.assertIn("디에틸에테르", result.issues[0].message)
+        self.assertIn("혼유", result.issues[0].message)
+
     def test_dibk_uses_corrected_area_top_two_and_keeps_overflow_excluded(self) -> None:
         values = [peak(1, 100, "DIBK"), peak(2, 300, "DIBK"), peak(3, 200, "DIBK")]
         correction = PeakCorrection(
@@ -449,7 +596,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         source = batch([
             Sample(1, "669-업체", "669-업체", SampleType.NUMERIC,
                    worker_match_key="669", peaks=[unnamed])
-        ])
+        ], "에틸렌글리콜")
         source.analysis_no_start = 599
         source.analysis_no_end = 680
 
@@ -537,7 +684,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         )
 
         result = self.service(template).preview_batch(
-            batch([worker]), Path("one-column-template.xlsx"), "A"
+            batch([worker], "1컬럼혼유"), Path("one-column-template.xlsx"), "A"
         )
 
         mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
@@ -572,7 +719,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
             ),
         ]
         result = self.service(template).preview_batch(
-            batch(samples), Path("one-column-template.xlsx"), "A"
+            batch(samples, "1컬럼혼유"), Path("one-column-template.xlsx"), "A"
         )
         mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
         self.assertTrue(result.can_generate)
@@ -598,7 +745,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         )
 
         result = self.service(template).preview_batch(
-            batch([worker]), Path("one-column-template.xlsx"), "A"
+            batch([worker], "1컬럼혼유"), Path("one-column-template.xlsx"), "A"
         )
 
         self.assertTrue(result.can_generate)
@@ -647,7 +794,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
             ),
         ]
         result = self.service(mek_snapshot()).preview_batch(
-            batch(samples), Path("mek-template.xlsx"), "A"
+            batch(samples, "MEK"), Path("mek-template.xlsx"), "A"
         )
         mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
 
@@ -684,7 +831,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
             ],
         )
         result = self.service(mek_snapshot()).preview_batch(
-            batch([sample_90, sample_116]), Path("mek-template.xlsx"), "A"
+            batch([sample_90, sample_116], "MEK"), Path("mek-template.xlsx"), "A"
         )
         mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
         residual = [row for row in result.rows if row.status is ExcelPreviewStatus.EXCLUDED]

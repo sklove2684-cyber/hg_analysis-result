@@ -59,6 +59,7 @@ STD_REPLICATES = {
     StdMethod.A: (1, 2, 3, 4, 5),
     StdMethod.B: (1, 2, 3, 4, 6),
 }
+DIETHYL_ETHER_STD_AREA_NEAR_DUPLICATE_TOLERANCE = Decimal("0.05")
 LEGACY_RECOVERY_ROW_START = {
     ConcentrationLevel.LOW: 37,
     ConcentrationLevel.MID: 40,
@@ -81,7 +82,6 @@ class TemplateProfile:
     worker_row_end: int
     dibk_std_slots: tuple[str, ...] = ()
     dibk_recovery_slots: tuple[str, ...] = ()
-    std_replicates_override: tuple[int, ...] = ()
 
 
 LEGACY_PROFILE = TemplateProfile(
@@ -230,10 +230,6 @@ DIETHYL_ETHER_PROFILE = TemplateProfile(
     },
     worker_row_start=19,
     worker_row_end=122,
-    # The source PDF has six named STD injections, while the workbook has five
-    # non-zero calibration levels. STD2 and STD3 represent the same level; the
-    # approved template levels correspond to source STD1, STD2, STD4, STD5, STD6.
-    std_replicates_override=(1, 2, 4, 5, 6),
 )
 
 ACN_PROFILE = TemplateProfile(
@@ -521,6 +517,9 @@ class PreviewExcelExportService:
         excluded_std_samples = self._select_legacy_std_set(
             batch.samples, method, profile, result
         )
+        self._validate_diethyl_ether_std_levels(
+            batch.samples, excluded_std_samples, method, profile, result
+        )
 
         for sample in batch.samples:
             if sample.sample_id in excluded_std_samples:
@@ -623,6 +622,93 @@ class PreviewExcelExportService:
             ExcelPreviewIssue(ValidationSeverity.ERROR, code, message)
         )
         return set()
+
+    def _validate_diethyl_ether_std_levels(
+        self,
+        samples: list[Sample],
+        excluded_sample_ids: set[UUID],
+        method: StdMethod,
+        profile: TemplateProfile,
+        result: ExcelPreviewResult,
+    ) -> None:
+        """Block suspicious calibration levels without changing the A/B selection.
+
+        LabSolutions reports the target peak concentration as 0.000, so a
+        duplicated standard concentration cannot be read directly from the PDF.
+        For this single-material profile, adjacent selected levels whose target
+        Areas differ by at most 5%, or whose Area order is reversed, require
+        operator review. No STD number is substituted automatically.
+        """
+        if profile != DIETHYL_ETHER_PROFILE:
+            return
+        if any(issue.code.startswith("STD_SET_") for issue in result.issues):
+            return
+
+        selected_replicates = self._std_replicates(profile, method)
+        selected_samples = {
+            sample.replicate_no: sample
+            for sample in samples
+            if sample.sample_type is SampleType.STD
+            and sample.sample_id not in excluded_sample_ids
+            and sample.replicate_no in selected_replicates
+        }
+        if set(selected_samples) != set(selected_replicates):
+            return
+
+        areas: list[tuple[int, int]] = []
+        target_rt = DIETHYL_ETHER_TARGET_RETENTION_TIMES["Diethyl ether"]
+        for replicate_no in selected_replicates:
+            peaks = [
+                peak
+                for peak in selected_samples[replicate_no].peaks
+                if peak.include_for_excel
+                and peak.material_standard == "Diethyl ether"
+            ]
+            if not peaks:
+                return
+            selected_peak = min(
+                peaks,
+                key=lambda peak: (
+                    abs(peak.retention_time - target_rt),
+                    peak.peak_no,
+                    -self._applied_area(peak),
+                ),
+            )
+            areas.append((replicate_no, self._applied_area(selected_peak)))
+
+        suspicious: list[str] = []
+        for (previous_no, previous_area), (current_no, current_area) in zip(
+            areas, areas[1:]
+        ):
+            larger = max(previous_area, current_area)
+            relative_difference = (
+                Decimal(abs(current_area - previous_area)) / Decimal(larger)
+                if larger
+                else Decimal(0)
+            )
+            if (
+                current_area <= previous_area
+                or relative_difference
+                <= DIETHYL_ETHER_STD_AREA_NEAR_DUPLICATE_TOLERANCE
+            ):
+                suspicious.append(
+                    f"STD{previous_no} Area {previous_area:,} / "
+                    f"STD{current_no} Area {current_area:,} "
+                    f"(차이 {relative_difference * 100:.2f}%)"
+                )
+
+        if suspicious:
+            result.issues.append(
+                ExcelPreviewIssue(
+                    ValidationSeverity.ERROR,
+                    "STD_LEVEL_REVIEW_REQUIRED",
+                    f"STD 방식 {method.value} 선택 대상에서 검량선 농도 중복 또는 "
+                    "순서 이상이 의심됩니다: "
+                    + "; ".join(suspicious)
+                    + ". STD 번호를 자동 대체하지 않았습니다. 표준액 제조와 "
+                    "선택 방식을 확인하세요.",
+                )
+            )
 
     @staticmethod
     def _template_profile(
@@ -1050,8 +1136,6 @@ class PreviewExcelExportService:
     def _std_replicates(
         profile: TemplateProfile, method: StdMethod
     ) -> tuple[int, ...]:
-        if profile.std_replicates_override:
-            return profile.std_replicates_override
         return (
             (1, 2, 3, 4, 5)
             if profile in (MEK_PROFILE, ETHYLENE_GLYCOL_PROFILE, BC_PROFILE)

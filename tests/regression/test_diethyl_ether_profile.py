@@ -9,7 +9,8 @@ from zipfile import ZipFile
 from honyu_app.application.create_excel_export import CreateExcelExportService
 from honyu_app.application.preview_excel_export import PreviewExcelExportService
 from honyu_app.application.review_extraction import ReviewExtractionService
-from honyu_app.domain.enums import ExcelPreviewStatus
+from honyu_app.domain.enums import ExcelPreviewStatus, SampleType
+from honyu_app.domain.errors import ExcelExportError
 from honyu_app.infrastructure.database.mock_database_service import MockDatabaseService
 from honyu_app.infrastructure.excel.workbook_inspector import XlsxTemplateInspector
 from honyu_app.infrastructure.excel.workbook_validator import XlsxWorkbookValidator
@@ -45,76 +46,118 @@ MIXTURE_TEMPLATE = _find_file("(혼유) 601-690.xlsx")
 
 @unittest.skipUnless(PDF.is_file() and TEMPLATE.is_file(), "디에틸에테르 실제 PDF/XLSX가 없습니다.")
 class DiethylEtherActualFileTests(unittest.TestCase):
-    def _saved_batch(self, database: MockDatabaseService):
+    def _saved_batch(
+        self, database: MockDatabaseService, *, normalize_std3_area: bool = False
+    ):
         batch = LabSolutionsParser().parse(
             PDF,
             analysis_type="디에틸에테르",
             analysis_no_start=152,
             analysis_no_end=153,
         )
+        if normalize_std3_area:
+            std3 = next(
+                sample
+                for sample in batch.samples
+                if sample.sample_type is SampleType.STD and sample.replicate_no == 3
+            )
+            target = next(
+                peak for peak in std3.peaks
+                if peak.material_standard == "Diethyl ether"
+            )
+            target.area_raw = 125000
         review = ReviewExtractionService(database)
         review.complete_review(batch)
         return review.save_batch(batch)
 
-    def _preview(self):
+    def _preview(self, std_method: str = "A"):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         database = MockDatabaseService(Path(temporary.name) / "diethyl.db")
         saved = self._saved_batch(database)
         result = PreviewExcelExportService(database, XlsxTemplateInspector()).preview(
-            saved.batch_id, TEMPLATE, "A"
+            saved.batch_id, TEMPLATE, std_method
         )
         return database, saved, result
 
-    def test_actual_pdf_maps_confirmed_input_cells_without_profile_error(self) -> None:
-        _database, _saved, result = self._preview()
-        mapped = {
-            (row.target_sheet, row.target_cell): row.applied_area
-            for row in result.rows
-            if row.status is ExcelPreviewStatus.MAPPED
-        }
-
-        self.assertTrue(result.can_generate, result.issues)
-        self.assertEqual(result.error_count, 0)
-        self.assertEqual(result.mapped_count, 14)
-        self.assertEqual(result.excluded_count, 30)
-        self.assertFalse(any(
-            issue.code == "EXCEL_PROFILE_NOT_REGISTERED" for issue in result.issues
-        ))
-        self.assertEqual(
-            mapped,
-            {
-                ("LOD(area입력)", "F4"): 26539,
-                ("LOD(area입력)", "F5"): 62642,
-                ("LOD(area입력)", "F6"): 280075,
-                ("LOD(area입력)", "F7"): 534342,
-                ("LOD(area입력)", "F8"): 705737,
-                ("회수율", "B28"): 63284,
-                ("회수율", "B29"): 63257,
-                ("회수율", "B30"): 63242,
-                ("회수율", "B31"): 199922,
-                ("회수율", "B32"): 199716,
-                ("회수율", "B33"): 198830,
-                ("회수율", "B34"): 479146,
-                ("회수율", "B35"): 480417,
-                ("회수율", "B36"): 478150,
+    def test_actual_pdf_requires_review_and_never_substitutes_std_numbers(self) -> None:
+        expected_by_method = {
+            "A": {
+                "F4": 26539,
+                "F5": 62642,
+                "F6": 63347,
+                "F7": 280075,
+                "F8": 534342,
             },
-        )
-        duplicate_recheck = [
-            row
-            for row in result.rows
-            if row.sample_name == "STD2"
-            and row.applied_area == 61218
-            and row.status is ExcelPreviewStatus.EXCLUDED
-        ]
-        self.assertEqual(len(duplicate_recheck), 1)
-        self.assertEqual(duplicate_recheck[0].exclude_reason, "DUPLICATE_STD_SET")
+            "B": {
+                "F4": 26539,
+                "F5": 62642,
+                "F6": 63347,
+                "F7": 280075,
+                "F8": 705737,
+            },
+        }
+        for method, expected_std in expected_by_method.items():
+            with self.subTest(method=method):
+                _database, _saved, result = self._preview(method)
+                mapped = {
+                    row.target_cell: row.applied_area
+                    for row in result.rows
+                    if row.status is ExcelPreviewStatus.MAPPED
+                    and row.target_sheet == "LOD(area입력)"
+                    and row.target_cell in expected_std
+                }
 
-    def test_actual_export_preserves_formulas_styles_merges_and_charts(self) -> None:
+                self.assertFalse(result.can_generate)
+                self.assertEqual(result.error_count, 1)
+                self.assertEqual(result.mapped_count, 14)
+                self.assertEqual(result.excluded_count, 30)
+                self.assertEqual(mapped, expected_std)
+                issue = next(
+                    issue for issue in result.issues
+                    if issue.code == "STD_LEVEL_REVIEW_REQUIRED"
+                )
+                self.assertIn("STD2 Area 62,642", issue.message)
+                self.assertIn("STD3 Area 63,347", issue.message)
+                self.assertIn("자동 대체하지 않았습니다", issue.message)
+                duplicate_recheck = [
+                    row
+                    for row in result.rows
+                    if row.sample_name == "STD2"
+                    and row.applied_area == 61218
+                    and row.status is ExcelPreviewStatus.EXCLUDED
+                ]
+                self.assertEqual(len(duplicate_recheck), 1)
+                self.assertEqual(
+                    duplicate_recheck[0].exclude_reason, "DUPLICATE_STD_SET"
+                )
+
+    def test_actual_pdf_export_is_blocked_until_std_levels_are_confirmed(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             database = MockDatabaseService(root / "diethyl.db")
             saved = self._saved_batch(database)
+            output = root / "diethyl-result.xlsx"
+
+            with self.assertRaisesRegex(
+                ExcelExportError, "검량선 농도 중복 또는 순서 이상"
+            ):
+                CreateExcelExportService(
+                    database,
+                    PreviewExcelExportService(database, XlsxTemplateInspector()),
+                    XlsxXmlCellWriter(),
+                    XlsxWorkbookValidator(),
+                    object(),
+                    recalculate_with_excel=False,
+                ).create(saved.batch_id, TEMPLATE, output, "A", "REGRESSION")
+
+            self.assertFalse(output.exists())
+
+    def test_normal_std_levels_export_preserves_formulas_styles_merges_and_charts(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = MockDatabaseService(root / "diethyl.db")
+            saved = self._saved_batch(database, normalize_std3_area=True)
             output = root / "diethyl-result.xlsx"
 
             result = CreateExcelExportService(
@@ -134,9 +177,9 @@ class DiethylEtherActualFileTests(unittest.TestCase):
             expected = {
                 "F4": 26539,
                 "F5": 62642,
-                "F6": 280075,
-                "F7": 534342,
-                "F8": 705737,
+                "F6": 125000,
+                "F7": 280075,
+                "F8": 534342,
             }
             for address, value in expected.items():
                 cell = after.cell("LOD(area입력)", address)

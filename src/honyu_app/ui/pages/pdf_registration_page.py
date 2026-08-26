@@ -316,6 +316,11 @@ class PdfRegistrationPage(QWidget):
 
     def _mark_analysis_type_user_selected(self, *_args) -> None:
         self._analysis_type_user_selected = True
+        current_pdf = Path(self.pdf_path.text())
+        if current_pdf.is_file():
+            # A manually changed analysis type starts a new logical job.  Clear
+            # the previous review/batch/template state before another extract.
+            self.new_work_started.emit(current_pdf)
 
     def start_extraction(self) -> None:
         path = Path(self.pdf_path.text())

@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS samples (
     replicate_no INTEGER,
     worker_match_key TEXT,
     is_blank INTEGER NOT NULL DEFAULT 0 CHECK (is_blank IN (0, 1)),
+    total_area INTEGER,
     created_at TEXT NOT NULL,
     UNIQUE (batch_id, page_no)
 );

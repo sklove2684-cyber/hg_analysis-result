@@ -62,6 +62,7 @@ class Sample:
     replicate_no: int | None = None
     worker_match_key: str | None = None
     is_blank: bool = False
+    total_area: int | None = None
     peaks: list[Peak] = field(default_factory=list)
     sample_id: UUID = field(default_factory=uuid4)
 

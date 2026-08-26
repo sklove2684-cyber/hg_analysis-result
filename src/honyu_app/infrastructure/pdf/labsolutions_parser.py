@@ -64,7 +64,7 @@ class LabSolutionsParser:
                     re.search(r"<\s*Sample Information\s*>", text, re.IGNORECASE)
                 )
                 is_new_sample_page = sample_name is not None or has_sample_information
-                table = self._find_peak_table(
+                table, total_area = self._find_peak_table(
                     page.extract_tables(),
                     page_no,
                     allow_continuation=is_new_sample_page is False,
@@ -72,7 +72,7 @@ class LabSolutionsParser:
                 if is_new_sample_page:
                     metadata = self._extract_metadata(text, page_no)
                     sample = self._build_sample(
-                        page_no, metadata, table, allowed_materials
+                        page_no, metadata, table, allowed_materials, total_area
                     )
                     samples.append(sample)
                     added_peaks = sample.peaks
@@ -83,7 +83,7 @@ class LabSolutionsParser:
                             "원본 Sample 페이지가 없습니다."
                         )
                     added_peaks = self._append_continuation_page(
-                        samples[-1], page_no, table, allowed_materials
+                        samples[-1], page_no, table, allowed_materials, total_area
                     )
                 if progress_callback:
                     progress_callback(page_no, total_pages)
@@ -94,6 +94,9 @@ class LabSolutionsParser:
             self._apply_session_material_aliases(
                 samples, inferred_aliases, allowed_materials
             )
+        self._apply_analysis_special_rules(
+            analysis_type, samples, allowed_materials
+        )
         warning_count = sum(
             peak.exclude_reason is ExcludeReason.UNKNOWN_MATERIAL
             for sample in samples
@@ -191,6 +194,35 @@ class LabSolutionsParser:
                 peak.exclude_reason = reason
                 peak.include_for_excel = reason is None
 
+    def _apply_analysis_special_rules(
+        self,
+        analysis_type: str,
+        samples: list[Sample],
+        allowed_materials: set[str],
+    ) -> None:
+        if analysis_type != "DMF,DMA":
+            return
+        for sample in samples:
+            for index, peak in enumerate(sample.peaks[:-1]):
+                if peak.material_standard != "DMF":
+                    continue
+                following = sample.peaks[index + 1]
+                if (
+                    following.material_raw is not None
+                    or following.retention_time <= peak.retention_time
+                ):
+                    continue
+                following.material_standard = "DMA"
+                reason = self._exclude_reason(
+                    sample.sample_name_raw,
+                    sample.sample_type,
+                    "DMA",
+                    "DMA",
+                    allowed_materials,
+                )
+                following.exclude_reason = reason
+                following.include_for_excel = reason is None
+
     @staticmethod
     def extract_analysis_range(filename: str) -> tuple[int, int] | None:
         matches = re.findall(r"(?<!\d)(\d+)\s*-\s*(\d+)(?!\d)", filename)
@@ -246,37 +278,43 @@ class LabSolutionsParser:
         page_no: int,
         *,
         allow_continuation: bool = False,
-    ) -> list[list[str | None]]:
+    ) -> tuple[list[list[str | None]], int | None]:
         expected = ["Peak#", "Ret. Time", "Area", "Height", "Conc.", "Unit", "Mark", "Name"]
         for table in tables:
             for index, row in enumerate(table):
                 normalized = [(cell or "").strip() for cell in row]
                 if normalized == expected:
-                    rows, saw_total = cls._continuation_peak_rows(
+                    rows, saw_total, total_area = cls._continuation_peak_rows(
                         table[index + 1 :]
                     )
                     if rows or (allow_continuation and saw_total):
-                        return rows
+                        return rows, total_area
             if allow_continuation:
-                rows, saw_total = cls._continuation_peak_rows(table)
+                rows, saw_total, total_area = cls._continuation_peak_rows(table)
                 if rows or saw_total:
-                    return rows
+                    return rows, total_area
         raise ValidationError(f"PDF {page_no}페이지: 8열 Peak Table을 찾을 수 없습니다.")
 
     @classmethod
     def _continuation_peak_rows(
         cls, rows: list[list[str | None]]
-    ) -> tuple[list[list[str | None]], bool]:
+    ) -> tuple[list[list[str | None]], bool, int | None]:
         peaks: list[list[str | None]] = []
         saw_total = False
+        total_area: int | None = None
         for candidate in rows:
             first = (candidate[0] or "").strip() if candidate else ""
             if first.casefold() == "total":
                 saw_total = True
+                if len(candidate) > 2 and candidate[2]:
+                    try:
+                        total_area = int(candidate[2].replace(",", "").strip())
+                    except ValueError:
+                        total_area = None
                 break
             if cls._looks_like_peak_row(candidate):
                 peaks.append(candidate)
-        return peaks, saw_total
+        return peaks, saw_total, total_area
 
     @staticmethod
     def _looks_like_peak_row(row: list[str | None]) -> bool:
@@ -297,6 +335,7 @@ class LabSolutionsParser:
         metadata: dict[str, object],
         rows: list[list[str | None]],
         allowed_materials: set[str] | None,
+        total_area: int | None,
     ) -> Sample:
         raw_name = str(metadata["sample_name"])
         sample_type, level, replicate, worker_key, is_blank = self._classify_sample(raw_name)
@@ -316,6 +355,7 @@ class LabSolutionsParser:
             replicate_no=replicate,
             worker_match_key=worker_key,
             is_blank=is_blank,
+            total_area=total_area,
             peaks=peaks,
         )
 
@@ -325,6 +365,7 @@ class LabSolutionsParser:
         page_no: int,
         rows: list[list[str | None]],
         allowed_materials: set[str] | None,
+        total_area: int | None,
     ) -> list[Peak]:
         existing_peak_numbers = {peak.peak_no for peak in sample.peaks}
         added = self._build_peaks(
@@ -346,6 +387,8 @@ class LabSolutionsParser:
                 f"중복됩니다: {sorted(duplicate_numbers)}"
             )
         sample.peaks.extend(added)
+        if total_area is not None:
+            sample.total_area = total_area
         return added
 
     def _build_peaks(

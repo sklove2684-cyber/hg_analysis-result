@@ -50,7 +50,7 @@ class SampleClassificationTests(unittest.TestCase):
             self.parser._find_peak_table(
                 total_only, 40, allow_continuation=True
             ),
-            [],
+            ([], 5394472),
         )
         with self.assertRaisesRegex(ValidationError, "Peak Table"):
             self.parser._find_peak_table(total_only, 40)
@@ -64,11 +64,12 @@ class SampleClassificationTests(unittest.TestCase):
             ]
         ]
 
-        rows = self.parser._find_peak_table(
+        rows, total_area = self.parser._find_peak_table(
             continuation, 40, allow_continuation=True
         )
 
         self.assertEqual([row[0] for row in rows], ["27", "28"])
+        self.assertEqual(total_area, 5394472)
 
     @staticmethod
     def _named_sample(page: int, name: str, sample_type: SampleType, material: str) -> Sample:
@@ -91,22 +92,16 @@ class SampleClassificationTests(unittest.TestCase):
             ],
         )
 
-    def test_pending_single_material_exact_match_is_inferred_for_session(self) -> None:
+    def test_registered_material_does_not_need_session_inference(self) -> None:
         samples = [
             self._named_sample(1, "STD1", SampleType.STD, "메틸 n아밀케톤"),
             self._named_sample(2, "STD2", SampleType.STD, "메틸 n아밀케톤"),
             self._named_sample(3, "저1", SampleType.RECOVERY, "메틸 n아밀케톤"),
         ]
-        aliases = self.parser._infer_session_material_aliases("메틸 n아밀케톤", samples)
-        self.assertEqual(aliases, {"메틸n아밀케톤": "메틸 n아밀케톤"})
-
-        self.parser._apply_session_material_aliases(
-            samples, aliases, {"메틸 n아밀케톤", "CS2"}
+        self.assertEqual(
+            self.parser._infer_session_material_aliases("메틸 n아밀케톤", samples),
+            {},
         )
-        self.assertTrue(
-            all(sample.peaks[0].material_standard == "메틸 n아밀케톤" for sample in samples)
-        )
-        self.assertTrue(all(sample.peaks[0].exclude_reason is None for sample in samples))
 
     def test_pending_material_requires_repeated_std_confirmation(self) -> None:
         samples = [
@@ -125,3 +120,32 @@ class SampleClassificationTests(unittest.TestCase):
         self.assertEqual(
             self.parser._infer_session_material_aliases("DMF,DMA", samples), {}
         )
+
+    def test_dmf_dma_assigns_only_the_immediately_following_unnamed_peak(self) -> None:
+        sample = Sample(
+            1,
+            "STD1",
+            "STD1",
+            SampleType.STD,
+            replicate_no=1,
+            peaks=[
+                Peak(1, Decimal("2.700"), 100, material_raw="DMF",
+                     material_standard="DMF", source_page=1),
+                Peak(2, Decimal("3.200"), 200, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=1),
+                Peak(3, Decimal("3.500"), 300, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=1),
+            ],
+        )
+
+        self.parser._apply_analysis_special_rules(
+            "DMF,DMA", [sample], {"DMF", "DMA", "CS2"}
+        )
+
+        self.assertEqual(sample.peaks[1].material_standard, "DMA")
+        self.assertTrue(sample.peaks[1].include_for_excel)
+        self.assertIsNone(sample.peaks[1].exclude_reason)
+        self.assertIsNone(sample.peaks[2].material_standard)
+        self.assertEqual(sample.peaks[2].exclude_reason, ExcludeReason.UNNAMED_PEAK)

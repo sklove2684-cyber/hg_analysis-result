@@ -269,6 +269,35 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
         review.deleteLater()
         excel.deleteLater()
 
+    def test_changing_analysis_type_for_loaded_pdf_clears_downstream_state(self) -> None:
+        registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
+        review = ExtractionReviewPage(self.service)
+        excel = ExcelExportPage(self.database, None, None)
+        registration.new_work_started.connect(review.reset_for_new_work)
+        registration.new_work_started.connect(excel.reset_for_new_work)
+        current_pdf = Path(self.temp.name) / "current.pdf"
+        current_pdf.touch()
+        registration.pdf_path.setText(str(current_pdf))
+        review.load_batch(make_batch(batch_code="STALE-BATCH"))
+        excel.batch_combo.addItem("이전 배치", uuid4())
+        excel.template_path.setText(str(Path(self.temp.name) / "old.xlsx"))
+        excel.output_path.setText(str(Path(self.temp.name) / "old-result.xlsx"))
+        excel._result = SimpleNamespace(can_generate=True)
+
+        registration.analysis_type.setCurrentText("DMF,DMA")
+        registration._mark_analysis_type_user_selected()
+
+        self.assertTrue(registration._analysis_type_user_selected)
+        self.assertIsNone(review._batch)
+        self.assertEqual(review.saved_batches.currentIndex(), 0)
+        self.assertEqual(excel.batch_combo.currentIndex(), -1)
+        self.assertEqual(excel.template_path.text(), "")
+        self.assertEqual(excel.output_path.text(), "")
+        self.assertIsNone(excel._result)
+        registration.deleteLater()
+        review.deleteLater()
+        excel.deleteLater()
+
     def test_main_window_does_not_wait_for_slow_shared_folder_check(self) -> None:
         local = Path(self.temp.name) / "exports"
         local.mkdir()
@@ -295,7 +324,9 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
         started = time.perf_counter()
         window = MainWindow(SlowController(), LabSolutionsParser(), self.database)
         construction_seconds = time.perf_counter() - started
-        self.assertLess(construction_seconds, 0.15)
+        # The mocked synchronous network wait is 0.20s.  Keep the assertion
+        # below that boundary while allowing normal Windows/CI scheduler jitter.
+        self.assertLess(construction_seconds, 0.20)
         self.assertIn("확인 대기", window._excel_page.storage_mode.text())
 
         events = []

@@ -81,6 +81,9 @@ class TemplateProfile:
     worker_row_end: int
     dibk_std_slots: tuple[str, ...] = ()
     dibk_recovery_slots: tuple[str, ...] = ()
+    use_runtime_std_rt: bool = False
+    worker_key_mode: str = "last"
+    special_kind: str | None = None
 
 
 LEGACY_PROFILE = TemplateProfile(
@@ -229,6 +232,7 @@ DIETHYL_ETHER_PROFILE = TemplateProfile(
     },
     worker_row_start=19,
     worker_row_end=122,
+    use_runtime_std_rt=True,
 )
 
 ACN_PROFILE = TemplateProfile(
@@ -396,6 +400,178 @@ G3_PROFILE = TemplateProfile(
     worker_row_end=41,
 )
 
+DMF_DMA_PROFILE = TemplateProfile(
+    key="dmf_dma",
+    name="DMF,DMA",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"DMF": "G", "DMA": "J"},
+    numeric_columns={"DMF": "F", "DMA": "I"},
+    recovery_columns={"DMF": "B", "DMA": "C"},
+    std_row_start=5,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=20,
+    worker_row_end=123,
+    use_runtime_std_rt=True,
+)
+
+ALCOHOL_4_PROFILE = TemplateProfile(
+    key="alcohol_4",
+    name="알콜4",
+    required_sheets=("검량선", "area입력", "회수율", "STD제조"),
+    area_sheet="area입력",
+    std_columns={"IBA": "G", "n-BTOH": "J", "IAA": "M", "2-BTOH": "P"},
+    numeric_columns={"IBA": "F", "n-BTOH": "I", "IAA": "L", "2-BTOH": "O"},
+    recovery_columns={"IBA": "B", "n-BTOH": "C", "IAA": "D", "2-BTOH": "E"},
+    std_row_start=5,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 30,
+        ConcentrationLevel.MID: 33,
+        ConcentrationLevel.HIGH: 36,
+    },
+    worker_row_start=21,
+    worker_row_end=287,
+    use_runtime_std_rt=True,
+)
+
+PROPYLENE_OXIDE_PROFILE = TemplateProfile(
+    key="propylene_oxide",
+    name="1,2-에폭시프로판(산화프로필렌)",
+    required_sheets=("검량선", "결과입력(area입력)", "회수율", "STD제조"),
+    area_sheet="결과입력(area입력)",
+    std_columns={"Propylene oxide": "F"},
+    numeric_columns={"Propylene oxide": "F"},
+    recovery_columns={"Propylene oxide": "B"},
+    std_row_start=14,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 29,
+        ConcentrationLevel.MID: 32,
+        ConcentrationLevel.HIGH: 35,
+    },
+    worker_row_start=26,
+    worker_row_end=79,
+    use_runtime_std_rt=True,
+)
+
+DICHLOROMETHANE_PROFILE = TemplateProfile(
+    key="dichloromethane",
+    name="디클로로메탄(MC)",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"Dichloromethane": "F"},
+    numeric_columns={"Dichloromethane": "F"},
+    recovery_columns={"Dichloromethane": "B"},
+    std_row_start=4,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=19,
+    worker_row_end=122,
+    use_runtime_std_rt=True,
+    worker_key_mode="compound",
+)
+
+METHYL_N_AMYL_KETONE_PROFILE = TemplateProfile(
+    key="methyl_n_amyl_ketone",
+    name="메틸 n아밀케톤",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"메틸 n-아밀케톤": "E"},
+    numeric_columns={"메틸 n-아밀케톤": "E"},
+    recovery_columns={"메틸 n-아밀케톤": "B"},
+    std_row_start=4,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=19,
+    worker_row_end=122,
+    use_runtime_std_rt=True,
+)
+
+VINYL_ACETATE_PROFILE = TemplateProfile(
+    key="vinyl_acetate",
+    name="비닐아세테이트",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"Vinyl acetate": "F"},
+    numeric_columns={"Vinyl acetate": "F"},
+    recovery_columns={"Vinyl acetate": "B"},
+    std_row_start=4,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=20,
+    worker_row_end=122,
+    use_runtime_std_rt=True,
+)
+
+ISOPROPYL_ACETATE_PROFILE = TemplateProfile(
+    key="isopropyl_acetate",
+    name="이소프로필 아세테이트",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"Isopropyl acetate": "E"},
+    numeric_columns={"Isopropyl acetate": "E"},
+    recovery_columns={"Isopropyl acetate": "B"},
+    std_row_start=4,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=20,
+    worker_row_end=122,
+    use_runtime_std_rt=True,
+)
+
+PYRIDINE_PROFILE = TemplateProfile(
+    key="pyridine",
+    name="피리딘",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"Pyridine": "F"},
+    numeric_columns={"Pyridine": "F"},
+    recovery_columns={"Pyridine": "B"},
+    std_row_start=4,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=19,
+    worker_row_end=122,
+    use_runtime_std_rt=True,
+)
+
+STODDARD_SOLVENT_PROFILE = TemplateProfile(
+    key="stoddard_solvent",
+    name="스토다드솔벤트",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"Stoddard total": "F", "Stoddard CS2": "G", "Stoddard residual": "H"},
+    numeric_columns={"Stoddard solvent": "E"},
+    recovery_columns={"Stoddard total": "D", "Stoddard CS2": "E", "Stoddard residual": "F"},
+    std_row_start=4,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=19,
+    worker_row_end=122,
+    special_kind="stoddard",
+)
+
 ONE_COLUMN_TARGET_RETENTION_TIMES = {
     "methyl acetate": Decimal("2.551"),
     "c-hexane": Decimal("3.730"),
@@ -489,10 +665,10 @@ class PreviewExcelExportService:
                 )
             )
             return result
-        profile = self._template_profile(snapshot, result)
+        expected_profile_key = excel_profile_key_for(batch.analysis_type)
+        profile = self._template_profile(snapshot, result, expected_profile_key)
         if profile is None:
             return result
-        expected_profile_key = excel_profile_key_for(batch.analysis_type)
         if expected_profile_key != profile.key:
             result.issues.append(
                 ExcelPreviewIssue(
@@ -516,22 +692,31 @@ class PreviewExcelExportService:
         runtime_target_retention_times = self._runtime_target_retention_times(
             batch.samples, excluded_std_samples, method, profile
         )
-        if (
-            profile == DIETHYL_ETHER_PROFILE
-            and "Diethyl ether" not in runtime_target_retention_times
-            and any(
-                peak.include_for_excel and peak.material_standard == "Diethyl ether"
-                for sample in batch.samples
-                for peak in sample.peaks
-            )
-        ):
-            result.issues.append(
-                ExcelPreviewIssue(
-                    ValidationSeverity.ERROR,
-                    "STD_TARGET_RT_NOT_FOUND",
-                    "선택된 STD 세트에서 Diethyl ether 기준 RT를 확인할 수 없습니다.",
+        if profile.use_runtime_std_rt:
+            missing_runtime_materials = [
+                material
+                for material in profile.std_columns
+                if material not in runtime_target_retention_times
+                and any(
+                    peak.include_for_excel and peak.material_standard == material
+                    for sample in batch.samples
+                    for peak in sample.peaks
                 )
-            )
+            ]
+            for material in missing_runtime_materials:
+                result.issues.append(
+                    ExcelPreviewIssue(
+                        ValidationSeverity.ERROR,
+                        "STD_TARGET_RT_NOT_FOUND",
+                        f"선택된 STD 세트에서 {material} 기준 RT를 확인할 수 없습니다.",
+                    )
+                )
+
+        stoddard_cs2_rt = (
+            self._stoddard_cs2_reference_rt(batch.samples)
+            if profile.special_kind == "stoddard"
+            else None
+        )
 
         for sample in batch.samples:
             if sample.sample_id in excluded_std_samples:
@@ -555,6 +740,7 @@ class PreviewExcelExportService:
                 target_analysis_numbers,
                 runtime_target_retention_times,
                 result,
+                stoddard_cs2_rt=stoddard_cs2_rt,
             )
         self._detect_target_collisions(result)
         return result
@@ -569,23 +755,35 @@ class PreviewExcelExportService:
     ) -> set[UUID]:
         """Select one complete STD run when a profile can contain recheck sets.
 
-        혼유 and 디에틸에테르 source PDFs can contain a complete calibration run
-        followed by partial recheck standards. Other profiles retain their
-        established behaviour. A single isolated STD is left alone so focused
-        review/test batches remain valid.
+        A source PDF can contain a complete calibration run followed by partial
+        recheck standards.  Set selection is only activated when a replicate
+        number repeats, so ordinary STD1~5/6 runs retain their normal behaviour.
         """
-        if profile not in (LEGACY_PROFILE, DIETHYL_ETHER_PROFILE):
-            return set()
-
         std_samples = [sample for sample in samples if sample.sample_type is SampleType.STD]
         replicate_counts: dict[int, int] = defaultdict(int)
         for sample in std_samples:
             if sample.replicate_no is not None:
                 replicate_counts[sample.replicate_no] += 1
-        needs_set_selection = len(std_samples) > 1 or any(
-            count > 1 for count in replicate_counts.values()
-        )
+        needs_set_selection = any(count > 1 for count in replicate_counts.values())
         if not needs_set_selection:
+            required = cls._std_replicates(profile, method)
+            available = {
+                sample.replicate_no
+                for sample in std_samples
+                if sample.replicate_no is not None
+            }
+            if (
+                len(std_samples) >= 2
+                and len(std_samples) == len(samples)
+                and not set(required).issubset(available)
+            ):
+                result.issues.append(
+                    ExcelPreviewIssue(
+                        ValidationSeverity.ERROR,
+                        "STD_SET_INCOMPLETE",
+                        f"완전한 STD 세트({', '.join(f'STD{n}' for n in required)})가 없습니다.",
+                    )
+                )
             return set()
 
         required = cls._std_replicates(profile, method)
@@ -644,10 +842,10 @@ class PreviewExcelExportService:
         method: StdMethod,
         profile: TemplateProfile,
     ) -> dict[str, Decimal]:
-        """Use an observed STD RT directly; do not average or infer by Area."""
-        if profile != DIETHYL_ETHER_PROFILE:
+        """Use observed STD RTs directly; do not average or infer by Area."""
+        if not profile.use_runtime_std_rt:
             return {}
-
+        result: dict[str, Decimal] = {}
         for replicate_no in cls._std_replicates(profile, method):
             for sample in samples:
                 if (
@@ -656,19 +854,24 @@ class PreviewExcelExportService:
                     or sample.replicate_no != replicate_no
                 ):
                     continue
-                peaks = [
-                    peak
-                    for peak in sample.peaks
-                    if peak.include_for_excel
-                    and peak.material_standard == "Diethyl ether"
-                ]
-                if len(peaks) == 1:
-                    return {"Diethyl ether": peaks[0].retention_time}
-        return {}
+                for material in profile.std_columns:
+                    if material in result:
+                        continue
+                    peaks = [
+                        peak
+                        for peak in sample.peaks
+                        if peak.include_for_excel
+                        and peak.material_standard == material
+                    ]
+                    if len(peaks) == 1:
+                        result[material] = peaks[0].retention_time
+        return result
 
     @staticmethod
     def _template_profile(
-        snapshot: ExcelTemplateSnapshot, result: ExcelPreviewResult
+        snapshot: ExcelTemplateSnapshot,
+        result: ExcelPreviewResult,
+        expected_profile_key: str | None = None,
     ) -> TemplateProfile | None:
         if ACN_PROFILE.area_sheet in snapshot.sheet_names:
             single_header = (
@@ -680,6 +883,8 @@ class PreviewExcelExportService:
                 profile = ACN_PROFILE
             elif single_header == "2-부톡시에탄올":
                 profile = BC_PROFILE
+            elif single_header == "1,2-epoxypropane":
+                profile = PROPYLENE_OXIDE_PROFILE
             else:
                 result.issues.append(
                     ExcelPreviewIssue(
@@ -690,8 +895,13 @@ class PreviewExcelExportService:
                 )
                 return None
         elif MEK_PROFILE.area_sheet in snapshot.sheet_names:
-            acetic_header = (
+            primary_header = (
                 str(snapshot.cell(MEK_PROFILE.area_sheet, "E2").value or "")
+                .strip()
+                .casefold()
+            )
+            alternate_header = (
+                str(snapshot.cell(MEK_PROFILE.area_sheet, "D2").value or "")
                 .strip()
                 .casefold()
             )
@@ -701,12 +911,26 @@ class PreviewExcelExportService:
                 .casefold()
                 for address in ("F3", "I3")
             )
-            if acetic_header == "acetic acid":
+            if primary_header == "acetic acid":
                 profile = ACETIC_ACID_PROFILE
-            elif acetic_header == "ethylene glycol":
+            elif primary_header == "ethylene glycol":
                 profile = ETHYLENE_GLYCOL_PROFILE
-            elif acetic_header == "diethyl ether":
+            elif primary_header == "diethyl ether":
                 profile = DIETHYL_ETHER_PROFILE
+            elif primary_header == "methylene chloride":
+                profile = DICHLOROMETHANE_PROFILE
+            elif primary_header == "vinyl acetate":
+                profile = VINYL_ACETATE_PROFILE
+            elif primary_header == "pyridine":
+                profile = PYRIDINE_PROFILE
+            elif alternate_header == "메틸 n-아밀케톤":
+                profile = METHYL_N_AMYL_KETONE_PROFILE
+            elif alternate_header == "isopropyl acetate":
+                profile = ISOPROPYL_ACETATE_PROFILE
+            elif alternate_header == "stoddard solvent":
+                profile = STODDARD_SOLVENT_PROFILE
+            elif lod_headers == ("dmf", "dma"):
+                profile = DMF_DMA_PROFILE
             elif lod_headers == ("isoamyl acetate", "n-propyl acetae"):
                 profile = ISOAMYL_N_PROPYL_ACETATE_PROFILE
             else:
@@ -746,6 +970,16 @@ class PreviewExcelExportService:
                 profile = CELLOSOLVE_PROFILE
             elif headers == ("thf", "cfm", "benzene", "chlorobenzene"):
                 profile = G2_PROFILE
+            elif headers == ("iba", "1-btoh", "iaa", "2-btoh"):
+                # Alcohol-2 and Alcohol-4 source workbooks share this physical
+                # four-column layout.  The selected analysis registry entry is
+                # the only reliable discriminator; Alcohol-2 intentionally
+                # writes only IBA/n-BTOH and preserves the other two columns.
+                profile = (
+                    ALCOHOL_PROFILE
+                    if expected_profile_key == ALCOHOL_PROFILE.key
+                    else ALCOHOL_4_PROFILE
+                )
             else:
                 iba_header, btoh_header = headers[:2]
                 if iba_header == "iba" and btoh_header in {"1-btoh", "n-btoh"}:
@@ -781,6 +1015,139 @@ class PreviewExcelExportService:
     def _worker_key(value: object | None) -> str | None:
         return extract_excel_analysis_number(value)
 
+    @classmethod
+    def _profile_worker_key(
+        cls, value: object | None, profile: TemplateProfile
+    ) -> str | None:
+        if profile.worker_key_mode == "compound" and value is not None:
+            match = re.search(r"(\d+)\s*-\s*(\d+)\s*$", str(value).strip())
+            if match:
+                return f"{match.group(1)}-{match.group(2)}"
+        return cls._worker_key(value)
+
+    @staticmethod
+    def _sample_number_decision(
+        sample: Sample, profile: TemplateProfile
+    ) -> SampleNumberDecision:
+        if (
+            profile.worker_key_mode == "compound"
+            and sample.sample_type not in {SampleType.BLANK, SampleType.RECOVERY_BLANK}
+        ):
+            match = re.fullmatch(
+                r"(\d+)\((\d+)\)", re.sub(r"\s+", "", sample.sample_name_raw)
+            )
+            if match:
+                return SampleNumberDecision(f"{match.group(1)}-{match.group(2)}")
+        return classify_sample_number(
+            sample.sample_name_normalized,
+            sample.sample_type,
+            is_blank=sample.is_blank,
+        )
+
+    def _stoddard_cs2_reference_rt(
+        self, samples: list[Sample]
+    ) -> Decimal | None:
+        for sample_type in (SampleType.BLANK, SampleType.STD):
+            for sample in samples:
+                if sample.sample_type is not sample_type:
+                    continue
+                unnamed = [peak for peak in sample.peaks if peak.material_raw is None]
+                if unnamed:
+                    return max(
+                        unnamed,
+                        key=lambda peak: (self._applied_area(peak), -peak.peak_no),
+                    ).retention_time
+        return None
+
+    def _map_stoddard_sample(
+        self,
+        sample: Sample,
+        snapshot: ExcelTemplateSnapshot,
+        profile: TemplateProfile,
+        row: int,
+        cs2_reference_rt: Decimal | None,
+        result: ExcelPreviewResult,
+    ) -> None:
+        if cs2_reference_rt is None:
+            self._sample_error(
+                result,
+                sample,
+                "STODDARD_CS2_RT_NOT_FOUND",
+                "BLANK 또는 STD에서 스토다드솔벤트 CS2 기준 RT를 확인할 수 없습니다.",
+            )
+            return
+        candidates = [peak for peak in sample.peaks if peak.material_raw is None]
+        if not candidates:
+            self._sample_error(
+                result,
+                sample,
+                "STODDARD_CS2_PEAK_NOT_FOUND",
+                "CS2 기준 RT에 대응하는 이름 없는 Peak가 없습니다.",
+            )
+            return
+        cs2_peak = min(
+            candidates,
+            key=lambda peak: (
+                abs(peak.retention_time - cs2_reference_rt),
+                peak.peak_no,
+            ),
+        )
+        total = (
+            sample.total_area
+            if sample.total_area is not None
+            else sum(self._applied_area(peak) for peak in sample.peaks)
+        )
+        residual = sum(
+            self._applied_area(peak)
+            for peak in sample.peaks
+            if peak is not cs2_peak and peak.material_standard != "Stoddard solvent"
+        )
+        solvent = total - self._applied_area(cs2_peak) - residual
+
+        for peak in sample.peaks:
+            result.rows.append(
+                self._row_for_peak(
+                    sample,
+                    peak,
+                    status=ExcelPreviewStatus.EXCLUDED,
+                    exclude_reason="STODDARD_COMPONENT_SOURCE",
+                    message="Total/CS2/제외 계산의 원본 Peak",
+                )
+            )
+
+        values = (
+            (("Stoddard solvent", solvent),)
+            if sample.sample_type in {SampleType.NUMERIC, SampleType.UNKNOWN}
+            else (
+                ("Stoddard total", total),
+                ("Stoddard CS2", self._applied_area(cs2_peak)),
+                ("Stoddard residual", residual),
+            )
+        )
+        for offset, (material, area) in enumerate(values, start=1):
+            synthetic = Peak(
+                peak_no=max((peak.peak_no for peak in sample.peaks), default=0) + offset,
+                retention_time=cs2_peak.retention_time,
+                area_raw=area,
+                material_raw=material,
+                material_standard=material,
+                include_for_excel=True,
+                source_page=sample.page_no,
+            )
+            column = self._material_column(profile, sample, material)
+            if column is None:
+                self._append_error_row(
+                    result,
+                    sample,
+                    synthetic,
+                    "UNSUPPORTED_MATERIAL",
+                    f"스토다드솔벤트 Excel 입력 열이 없습니다: {material}",
+                )
+                continue
+            self._append_mapped_row(
+                result, snapshot, profile, sample, synthetic, column, row
+            )
+
     @staticmethod
     def _sample_worker_key(sample: Sample) -> str | None:
         if sample.worker_match_key:
@@ -800,7 +1167,7 @@ class PreviewExcelExportService:
             # treated as writable worker rows.
             if analysis_cell.has_formula:
                 continue
-            key = self._worker_key(analysis_cell.value)
+            key = self._profile_worker_key(analysis_cell.value, profile)
             if key is not None:
                 index[key].append(row)
         return dict(index)
@@ -815,16 +1182,14 @@ class PreviewExcelExportService:
         target_analysis_numbers: set[str],
         runtime_target_retention_times: dict[str, Decimal],
         result: ExcelPreviewResult,
+        *,
+        stoddard_cs2_rt: Decimal | None = None,
     ) -> None:
-        number_decision = classify_sample_number(
-            sample.sample_name_normalized,
-            sample.sample_type,
-            is_blank=sample.is_blank,
-        )
+        number_decision = self._sample_number_decision(sample, profile)
         # A sample containing only unnamed/excluded peaks has nothing that can
         # be written.  Do not turn a missing template row into a validation
         # error before applying those established peak-exclusion rules.
-        if not any(
+        if profile.special_kind != "stoddard" and not any(
             peak.include_for_excel and peak.material_standard not in {None, "CS2"}
             for peak in sample.peaks
         ):
@@ -845,8 +1210,7 @@ class PreviewExcelExportService:
         if (
             sample.sample_type not in {SampleType.STD, SampleType.RECOVERY}
             and number_decision.analysis_number is not None
-            and str(int(number_decision.analysis_number))
-            not in target_analysis_numbers
+            and number_decision.analysis_number not in target_analysis_numbers
         ):
             for peak in sample.peaks:
                 result.rows.append(
@@ -862,6 +1226,7 @@ class PreviewExcelExportService:
                     )
                 )
             return
+
         row = self._sample_target_row(
             sample, method, profile, worker_rows, result, number_decision
         )
@@ -893,6 +1258,17 @@ class PreviewExcelExportService:
                     )
             return
 
+        if profile.special_kind == "stoddard":
+            self._map_stoddard_sample(
+                sample,
+                snapshot,
+                profile,
+                row,
+                stoddard_cs2_rt,
+                result,
+            )
+            return
+
         eligible = [
             peak
             for peak in sample.peaks
@@ -919,7 +1295,10 @@ class PreviewExcelExportService:
             if peak.material_standard != "DIBK":
                 single_groups[peak.material_standard or ""].append(peak)
         for material, peaks in single_groups.items():
-            if profile == ONE_COLUMN_PROFILE:
+            target_rt = runtime_target_retention_times.get(material)
+            if target_rt is not None:
+                pass
+            elif profile == ONE_COLUMN_PROFILE:
                 target_rt = ONE_COLUMN_TARGET_RETENTION_TIMES.get(material)
             elif profile == ALCOHOL_PROFILE:
                 target_rt = ALCOHOL_TARGET_RETENTION_TIMES.get(material)
@@ -930,7 +1309,7 @@ class PreviewExcelExportService:
             elif profile == ETHYLENE_GLYCOL_PROFILE:
                 target_rt = ETHYLENE_GLYCOL_TARGET_RETENTION_TIMES.get(material)
             elif profile == DIETHYL_ETHER_PROFILE:
-                target_rt = runtime_target_retention_times.get(material)
+                target_rt = None
             elif profile == ACN_PROFILE:
                 target_rt = ACN_TARGET_RETENTION_TIMES.get(material)
             elif profile == BC_PROFILE:
@@ -945,14 +1324,14 @@ class PreviewExcelExportService:
                 target_rt = G3_TARGET_RETENTION_TIMES.get(material)
             else:
                 target_rt = None
-            if target_rt is None and profile == DIETHYL_ETHER_PROFILE:
+            if target_rt is None and profile.use_runtime_std_rt:
                 for candidate in peaks:
                     result.rows.append(
                         self._row_for_peak(
                             sample,
                             candidate,
                             status=ExcelPreviewStatus.ERROR,
-                            message="STD에서 Diethyl ether 기준 RT를 확인할 수 없습니다.",
+                            message=f"STD에서 {material} 기준 RT를 확인할 수 없습니다.",
                         )
                     )
                 continue

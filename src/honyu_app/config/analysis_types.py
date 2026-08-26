@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,7 @@ IPA_MATERIALS = (
     _material("Isopropyl alcohol", "ipa", "isopropyl alcohol"),
 )
 METHANOL_MATERIALS = (
-    _material("Methanol", "메탄올", "메탄올A", "methanol"),
+    _material("Methanol", "메탄올", "메탄올A", "methanol", "MeOH"),
 )
 ACN_MATERIALS = (
     _material("Acetonitrile", "acn", "acetonitrile"),
@@ -66,6 +67,7 @@ PHENOL_MATERIALS = (
 PROPYLENE_OXIDE_MATERIALS = (
     _material(
         "Propylene oxide",
+        "1,2에폭시프로판",
         "1,2-에폭시프로판",
         "산화프로필렌",
         "propylene oxide",
@@ -75,7 +77,14 @@ DIETHYL_ETHER_MATERIALS = (
     _material("Diethyl ether", "디에틸에테르", "diethyl ether"),
 )
 DICHLOROMETHANE_MATERIALS = (
-    _material("Dichloromethane", "디클로로메탄", "mc", "dichloromethane"),
+    _material(
+        "Dichloromethane",
+        "디클로로메탄",
+        "M.C",
+        "MC",
+        "dichloromethane",
+        "Methylene chloride",
+    ),
 )
 CHLOROMETHANE_MATERIALS = (
     _material("Chloromethane", "메틸클로라이드", "chloromethane"),
@@ -84,7 +93,12 @@ VINYL_ACETATE_MATERIALS = (
     _material("Vinyl acetate", "비닐아세테이트", "vinyl acetate"),
 )
 ISOPROPYL_ACETATE_MATERIALS = (
-    _material("Isopropyl acetate", "이소프로필 아세테이트", "isopropyl acetate"),
+    _material(
+        "Isopropyl acetate",
+        "초산이소프로필",
+        "이소프로필 아세테이트",
+        "isopropyl acetate",
+    ),
 )
 ACETIC_ACID_MATERIALS = (
     _material("초산", "초산", "acetic acid"),
@@ -122,7 +136,31 @@ G3_MATERIALS = (
     _material("1,2-Dichloropropane", "1,2디클로로프로판"),
     _material("1,2-Dichloroethane", "1,2디클로로에탄"),
 )
-COMMON_MATERIALS = (_material("CS2", "cs2"),)
+DMF_DMA_MATERIALS = (
+    _material("DMF", "DMF"),
+    _material("DMA", "DMA"),
+)
+METHYL_N_AMYL_KETONE_MATERIALS = (
+    _material(
+        "메틸 n-아밀케톤",
+        "메틸 n아밀케톤",
+        "메틸 n-아밀케톤",
+    ),
+)
+ALCOHOL_4_MATERIALS = (
+    _material("IBA", "IBA"),
+    _material("n-BTOH", "n-부탄올", "1-BTOH", "n-BTOH"),
+    _material("IAA", "IAA"),
+    _material("2-BTOH", "2-부탄올", "2-BTOH"),
+)
+STODDARD_SOLVENT_MATERIALS = (
+    _material("Stoddard solvent", "스토다드솔벤트", "Stoddard solvent"),
+)
+COMMON_MATERIALS = (
+    _material("CS2", "cs2"),
+    _material("Formic acid", "formic acid", "개미산"),
+    _material("Carbon tetrachloride", "사염화탄소", "carbon tetrachloride"),
+)
 
 
 ANALYSIS_TYPES: tuple[AnalysisTypeDefinition, ...] = (
@@ -134,7 +172,7 @@ ANALYSIS_TYPES: tuple[AnalysisTypeDefinition, ...] = (
     AnalysisTypeDefinition("methanol", "메탄올A", METHANOL_MATERIALS),
     AnalysisTypeDefinition("acn", "ACN", ACN_MATERIALS, "acn"),
     AnalysisTypeDefinition("bc", "B.C", BC_MATERIALS, "bc"),
-    AnalysisTypeDefinition("dmf_dma", "DMF,DMA", materials_pending=True),
+    AnalysisTypeDefinition("dmf_dma", "DMF,DMA", DMF_DMA_MATERIALS, "dmf_dma"),
     AnalysisTypeDefinition(
         "isoamyl_n_propyl_acetate",
         "이소아밀,n-프로필 아세테이트",
@@ -146,6 +184,7 @@ ANALYSIS_TYPES: tuple[AnalysisTypeDefinition, ...] = (
         "propylene_oxide",
         "1,2-에폭시프로판(산화프로필렌)",
         PROPYLENE_OXIDE_MATERIALS,
+        "propylene_oxide",
     ),
     AnalysisTypeDefinition(
         "diethyl_ether",
@@ -158,30 +197,38 @@ ANALYSIS_TYPES: tuple[AnalysisTypeDefinition, ...] = (
         "pce", "PCE(테트라클로로에틸렌)", (TETRACHLOROETHYLENE_MATERIAL,)
     ),
     AnalysisTypeDefinition(
-        "dichloromethane", "디클로로메탄(MC)", DICHLOROMETHANE_MATERIALS
+        "dichloromethane", "디클로로메탄(MC)", DICHLOROMETHANE_MATERIALS,
+        "dichloromethane",
     ),
     AnalysisTypeDefinition(
         "methyl_n_amyl_ketone",
         "메틸 n아밀케톤",
-        materials_pending=True,
-        allow_runtime_single_material_inference=True,
+        METHYL_N_AMYL_KETONE_MATERIALS,
+        "methyl_n_amyl_ketone",
     ),
     AnalysisTypeDefinition(
         "chloromethane",
         "메틸클로라이드(Chloromethane)",
         CHLOROMETHANE_MATERIALS,
     ),
-    AnalysisTypeDefinition("vinyl_acetate", "비닐아세테이트", VINYL_ACETATE_MATERIALS),
-    AnalysisTypeDefinition("cellosolve", "셀로솔브", CELLOSOLVE_MATERIALS, "cellosolve"),
-    AnalysisTypeDefinition("alcohol_4", "알콜4", materials_pending=True),
-    AnalysisTypeDefinition("stoddard_solvent", "스토다드솔벤트", materials_pending=True),
     AnalysisTypeDefinition(
-        "isopropyl_acetate", "이소프로필 아세테이트", ISOPROPYL_ACETATE_MATERIALS
+        "vinyl_acetate", "비닐아세테이트", VINYL_ACETATE_MATERIALS,
+        "vinyl_acetate",
+    ),
+    AnalysisTypeDefinition("cellosolve", "셀로솔브", CELLOSOLVE_MATERIALS, "cellosolve"),
+    AnalysisTypeDefinition("alcohol_4", "알콜4", ALCOHOL_4_MATERIALS, "alcohol_4"),
+    AnalysisTypeDefinition(
+        "stoddard_solvent", "스토다드솔벤트",
+        STODDARD_SOLVENT_MATERIALS, "stoddard_solvent",
+    ),
+    AnalysisTypeDefinition(
+        "isopropyl_acetate", "이소프로필 아세테이트", ISOPROPYL_ACETATE_MATERIALS,
+        "isopropyl_acetate",
     ),
     AnalysisTypeDefinition(
         "acetic_acid", "초산", ACETIC_ACID_MATERIALS, "acetic_acid"
     ),
-    AnalysisTypeDefinition("pyridine", "피리딘", PYRIDINE_MATERIALS),
+    AnalysisTypeDefinition("pyridine", "피리딘", PYRIDINE_MATERIALS, "pyridine"),
     AnalysisTypeDefinition(
         "ethylene_glycol",
         "에틸렌글리콜",
@@ -229,11 +276,23 @@ def validate_analysis_type_registry(
             )
 
 
-def material_aliases() -> dict[str, str]:
+def normalize_material_alias_key(value: str) -> str:
+    """Normalize harmless notation differences while preserving chemical locants."""
+    compact = " ".join(value.strip().split()).casefold()
+    return compact.replace(" ", "").replace(".", "").replace("-", "")
+
+
+def material_aliases(
+    definitions: tuple[AnalysisTypeDefinition, ...] = ANALYSIS_TYPES,
+    common_materials: tuple[MaterialDefinition, ...] = COMMON_MATERIALS,
+) -> dict[str, str]:
     aliases: dict[str, str] = {}
-    for material in (*COMMON_MATERIALS, *(item for definition in ANALYSIS_TYPES for item in definition.supported_materials)):
+    for material in (
+        *common_materials,
+        *(item for definition in definitions for item in definition.supported_materials),
+    ):
         for alias in material.aliases:
-            key = " ".join(alias.strip().split()).casefold()
+            key = normalize_material_alias_key(alias)
             existing = aliases.get(key)
             if existing is not None and existing != material.canonical_name:
                 raise ValueError(
@@ -321,18 +380,18 @@ def infer_analysis_type(
             ("혼유-g3", "g3 혼유", "g3-혼유"),
         ),
         ("(알콜2) IBA,1-BTOH", ("알콜(2)", "알콜2")),
-        ("알콜4", ("알콜4",)),
-        ("DMF,DMA", ("dmf,dma", "dmf dma")),
+        ("알콜4", ("알콜(4)", "알콜4")),
+        ("DMF,DMA", ("dmf,dma", "dmf dma", "(dmf)")),
         ("이소아밀,n-프로필 아세테이트", ("이소아밀,n-프로필 아세테이트",)),
         ("1,2-에폭시프로판(산화프로필렌)", ("산화프로필렌", "1,2-에폭시프로판")),
         ("THF(Diethylene oxide)", ("diethylene oxide",)),
         ("PCE(테트라클로로에틸렌)", ("테트라클로로에틸렌",)),
         ("디클로로메탄(MC)", ("디클로로메탄",)),
         ("메틸클로라이드(Chloromethane)", ("chloromethane", "메틸클로라이드")),
-        ("메틸 n아밀케톤", ("메틸 n아밀케톤",)),
+        ("메틸 n아밀케톤", ("메틸 n아밀케톤", "메틸 n-아밀케톤")),
         ("비닐아세테이트", ("비닐아세테이트",)),
         ("스토다드솔벤트", ("스토다드솔벤트",)),
-        ("이소프로필 아세테이트", ("이소프로필 아세테이트",)),
+        ("이소프로필 아세테이트", ("이소프로필 아세테이트", "이소프로필아세테이트")),
         ("디에틸에테르", ("디에틸에테르",)),
         ("셀로솔브", ("셀로솔브",)),
         ("메탄올A", ("메탄올a", "메탄올", "methanol")),

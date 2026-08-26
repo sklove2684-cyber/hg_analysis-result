@@ -63,10 +63,13 @@ class MaterialNormalizerTests(unittest.TestCase):
             "페놀": "Phenol",
             "산화프로필렌": "Propylene oxide",
             "1,2-에폭시프로판": "Propylene oxide",
+            "1,2에폭시프로판": "Propylene oxide",
             "디에틸에테르": "Diethyl ether",
             "테트라클로로에틸렌": "Tetrachloroethylene",
             "디클로로메탄": "Dichloromethane",
             "MC": "Dichloromethane",
+            "M.C": "Dichloromethane",
+            "Methylene chloride": "Dichloromethane",
             "메틸클로라이드": "Chloromethane",
             "비닐아세테이트": "Vinyl acetate",
             "이소프로필 아세테이트": "Isopropyl acetate",
@@ -77,6 +80,12 @@ class MaterialNormalizerTests(unittest.TestCase):
             "E.G": "Ethylene glycol",
             "BC": "2-Butoxyethanol",
             "2-부톡시에탄올": "2-Butoxyethanol",
+            "MeOH": "Methanol",
+            "초산이소프로필": "Isopropyl acetate",
+            "2-부탄올": "2-BTOH",
+            "n-부탄올": "n-BTOH",
+            "메틸 n-아밀케톤": "메틸 n-아밀케톤",
+            "스토다드솔벤트": "Stoddard solvent",
         }
         for raw, expected in aliases.items():
             with self.subTest(raw=raw):
@@ -88,9 +97,23 @@ class MaterialNormalizerTests(unittest.TestCase):
     def test_carbon_tetrachloride_is_not_cfm_or_an_automation_material(self) -> None:
         normalizer = MaterialNormalizer()
         self.assertEqual(normalizer.normalize("CFM"), "CFM")
-        for raw in ("사염화탄소", "carbon tetrachloride", "tetrachloromethane", "CCl4"):
-            with self.subTest(raw=raw):
-                self.assertIsNone(normalizer.normalize(raw))
+        self.assertEqual(normalizer.normalize("사염화탄소"), "Carbon tetrachloride")
+        self.assertEqual(
+            normalizer.normalize("carbon tetrachloride"), "Carbon tetrachloride"
+        )
+        self.assertIsNone(normalizer.normalize("tetrachloromethane"))
+        self.assertIsNone(normalizer.normalize("CCl4"))
+        reason = LabSolutionsParser._exclude_reason(
+            "STD1", SampleType.STD, "사염화탄소", "Carbon tetrachloride",
+            set(supported_canonical_names_for("(혼유-G2) THF,CFM,벤젠,클로로벤젠")) | {"CS2"},
+        )
+        self.assertIs(reason, ExcludeReason.MATERIAL_NOT_SUPPORTED_FOR_ANALYSIS)
+
+    def test_dots_hyphens_case_and_spacing_are_normalized(self) -> None:
+        normalizer = MaterialNormalizer()
+        self.assertEqual(normalizer.normalize("  m. c  "), "Dichloromethane")
+        self.assertEqual(normalizer.normalize("1,2에폭시프로판"), "Propylene oxide")
+        self.assertEqual(normalizer.normalize("METHYLENE CHLORIDE"), "Dichloromethane")
 
     def test_known_material_outside_selected_analysis_is_excluded_without_unknown_warning(self) -> None:
         reason = LabSolutionsParser._exclude_reason(

@@ -74,6 +74,12 @@ class MockDatabaseService:
         try:
             with self._connect() as connection:
                 connection.executescript(schema)
+                sample_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(samples)")
+                }
+                if "total_area" not in sample_columns:
+                    connection.execute("ALTER TABLE samples ADD COLUMN total_area INTEGER")
                 connection.execute(
                     "UPDATE analysis_batches SET review_status = ? "
                     "WHERE review_status = ?",
@@ -167,8 +173,9 @@ class MockDatabaseService:
             INSERT INTO samples (
                 sample_id, batch_id, page_no, sample_name_raw, sample_name_normalized,
                 data_filename, method_filename, batch_filename, acquired_at, sample_type,
-                concentration_level, replicate_no, worker_match_key, is_blank, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                concentration_level, replicate_no, worker_match_key, is_blank,
+                total_area, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(sample.sample_id), str(batch_id), sample.page_no, sample.sample_name_raw,
@@ -177,7 +184,8 @@ class MockDatabaseService:
                 sample.acquired_at.isoformat() if sample.acquired_at else None,
                 sample.sample_type.value,
                 sample.concentration_level.value if sample.concentration_level else None,
-                sample.replicate_no, sample.worker_match_key, int(sample.is_blank), now,
+                sample.replicate_no, sample.worker_match_key, int(sample.is_blank),
+                sample.total_area, now,
             ),
         )
         for peak in sample.peaks:
@@ -334,7 +342,7 @@ class MockDatabaseService:
                 ConcentrationLevel, row["concentration_level"]
             ),
             replicate_no=row["replicate_no"], worker_match_key=row["worker_match_key"],
-            is_blank=bool(row["is_blank"]), peaks=peaks,
+            is_blank=bool(row["is_blank"]), total_area=row["total_area"], peaks=peaks,
             sample_id=UUID(row["sample_id"]),
         )
 

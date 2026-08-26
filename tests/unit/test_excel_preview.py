@@ -888,6 +888,88 @@ class ExcelPreviewServiceTests(unittest.TestCase):
             [("area입력", "G5"), ("회수율", "C31"), ("area입력", "L21")],
         )
 
+    def test_shared_four_column_alcohol_layout_uses_selected_analysis_profile(self) -> None:
+        template = one_column_snapshot(
+            TemplateCell("area입력", "F3", True, "IBA", "string"),
+            TemplateCell("area입력", "I3", True, "1-BTOH", "string"),
+            TemplateCell("area입력", "L3", True, "IAA", "string"),
+            TemplateCell("area입력", "O3", True, "2-BTOH", "string"),
+        )
+        alcohol_2 = batch(
+            [Sample(1, "STD1", "STD1", SampleType.STD, replicate_no=1,
+                    peaks=[peak(1, 100, "IBA")])],
+            "(알콜2) IBA,1-BTOH",
+        )
+        alcohol_4 = batch(
+            [Sample(1, "STD1", "STD1", SampleType.STD, replicate_no=1,
+                    peaks=[peak(1, 200, "IAA")])],
+            "알콜4",
+        )
+
+        result_2 = self.service(template).preview_batch(
+            alcohol_2, Path("(알콜2).xlsx"), "A"
+        )
+        result_4 = self.service(template).preview_batch(
+            alcohol_4, Path("(알콜4).xlsx"), "A"
+        )
+
+        self.assertTrue(result_2.can_generate, result_2.issues)
+        self.assertTrue(result_4.can_generate, result_4.issues)
+        self.assertEqual(
+            [(row.material, row.target_cell) for row in result_2.rows
+             if row.status is ExcelPreviewStatus.MAPPED],
+            [("IBA", "G5")],
+        )
+        self.assertEqual(
+            [(row.material, row.target_cell) for row in result_4.rows
+             if row.status is ExcelPreviewStatus.MAPPED],
+            [("IAA", "M5")],
+        )
+
+    def test_stoddard_residual_sums_all_non_solvent_peaks(self) -> None:
+        template = ExcelTemplateSnapshot(
+            Path("stoddard.xlsx"),
+            MEK_SHEETS,
+            {
+                ("LOD(area입력)", "D2"): TemplateCell(
+                    "LOD(area입력)", "D2", True, "Stoddard solvent", "string"
+                )
+            },
+        )
+        std = Sample(
+            1,
+            "STD1",
+            "STD1",
+            SampleType.STD,
+            replicate_no=1,
+            total_area=1000,
+            peaks=[
+                Peak(1, Decimal("2.000"), 20, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=1),
+                Peak(2, Decimal("2.620"), 700, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=1),
+                Peak(3, Decimal("3.000"), 30, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=1),
+                peak(4, 250, "Stoddard solvent"),
+            ],
+        )
+        source = batch([std], "스토다드솔벤트")
+
+        result = self.service(template).preview_batch(
+            source, Path("stoddard.xlsx"), "A"
+        )
+        mapped = {
+            row.target_cell: row.applied_area
+            for row in result.rows
+            if row.status is ExcelPreviewStatus.MAPPED
+        }
+
+        self.assertTrue(result.can_generate, result.issues)
+        self.assertEqual(mapped, {"F4": 1000, "G4": 700, "H4": 50})
+
     def test_one_column_ignores_formula_rows_that_mirror_worker_numbers(self) -> None:
         template = one_column_snapshot(
             TemplateCell("area입력", "A23", True, "262-124", "string"),
@@ -1309,6 +1391,8 @@ class ExcelPreviewServiceTests(unittest.TestCase):
 class XlsxTemplateInspectorTests(unittest.TestCase):
     def test_sample_template_exposes_confirmed_input_and_formula_cells(self) -> None:
         template = Path(__file__).parents[3] / "TEST" / "(혼유) 틀.xlsx"
+        if not template.is_file():
+            self.skipTest(f"실제 테스트 양식 없음: {template}")
         inspected = XlsxTemplateInspector().inspect(template)
         self.assertEqual(inspected.sheet_names, SHEETS)
         self.assertFalse(inspected.cell("area", "F15").has_formula)
@@ -1318,6 +1402,8 @@ class XlsxTemplateInspectorTests(unittest.TestCase):
 
     def test_one_column_template_exposes_confirmed_input_cells(self) -> None:
         template = Path(__file__).parents[3] / "TEST" / "(1컬럼혼유-틀).xlsx"
+        if not template.is_file():
+            self.skipTest(f"실제 테스트 양식 없음: {template}")
         inspected = XlsxTemplateInspector().inspect(template)
         self.assertEqual(inspected.sheet_names, ONE_COLUMN_SHEETS)
         for sheet, address in (

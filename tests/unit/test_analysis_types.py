@@ -3,6 +3,7 @@ import unittest
 from honyu_app.config.analysis_types import (
     ANALYSIS_TYPE_NAMES,
     AnalysisTypeDefinition,
+    MaterialDefinition,
     G2_SUPPORTED_MATERIALS,
     analysis_type_display_name,
     analysis_type_key,
@@ -10,6 +11,7 @@ from honyu_app.config.analysis_types import (
     has_excel_profile,
     infer_analysis_type,
     materials_pending_for,
+    material_aliases,
     supported_materials_for,
     validate_analysis_type_registry,
 )
@@ -52,11 +54,7 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
         self.assertEqual(
             pending,
             {
-                "DMF,DMA",
                 "THF(Diethylene oxide)",
-                "메틸 n아밀케톤",
-                "알콜4",
-                "스토다드솔벤트",
             },
         )
 
@@ -76,6 +74,10 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
             "초산": ("초산",),
             "피리딘": ("Pyridine",),
             "에틸렌글리콜": ("Ethylene glycol",),
+            "DMF,DMA": ("DMF", "DMA"),
+            "메틸 n아밀케톤": ("메틸 n-아밀케톤",),
+            "알콜4": ("IBA", "n-BTOH", "IAA", "2-BTOH"),
+            "스토다드솔벤트": ("Stoddard solvent",),
         }
         for analysis_type, canonical_names in expected.items():
             with self.subTest(analysis_type=analysis_type):
@@ -102,6 +104,18 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
             validate_analysis_type_registry(
                 (AnalysisTypeDefinition("new_type", "새 분석종류"),)
             )
+
+    def test_normalized_alias_collision_is_rejected(self) -> None:
+        definitions = (
+            AnalysisTypeDefinition(
+                "one", "one", (MaterialDefinition("A", ("M.C",)),)
+            ),
+            AnalysisTypeDefinition(
+                "two", "two", (MaterialDefinition("B", ("MC",)),)
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "중복 등록"):
+            material_aliases(definitions, ())
 
     def test_g2_material_allow_list_excludes_carbon_tetrachloride(self) -> None:
         self.assertEqual(
@@ -171,6 +185,15 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
             "에틸렌글리콜",
             "B.C",
             "디에틸에테르",
+            "DMF,DMA",
+            "알콜4",
+            "스토다드솔벤트",
+            "1,2-에폭시프로판(산화프로필렌)",
+            "디클로로메탄(MC)",
+            "메틸 n아밀케톤",
+            "비닐아세테이트",
+            "이소프로필 아세테이트",
+            "피리딘",
         ):
             self.assertTrue(has_excel_profile(name), name)
         for name in (
@@ -186,6 +209,15 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
                 "에틸렌글리콜",
                 "B.C",
                 "디에틸에테르",
+                "DMF,DMA",
+                "알콜4",
+                "스토다드솔벤트",
+                "1,2-에폭시프로판(산화프로필렌)",
+                "디클로로메탄(MC)",
+                "메틸 n아밀케톤",
+                "비닐아세테이트",
+                "이소프로필 아세테이트",
+                "피리딘",
             }
         ):
             self.assertFalse(has_excel_profile(name), name)

@@ -98,6 +98,7 @@ class MockDatabaseServiceTests(unittest.TestCase):
 
     def test_save_and_reload_full_batch(self) -> None:
         batch = make_batch()
+        batch.samples[0].total_area = 1_109_240
         result = self.service.save_analysis_batch(SaveAnalysisBatchCommand(batch))
         loaded = self.service.get_batch_detail(result.batch_id)
         self.assertEqual(loaded.batch_code, batch.batch_code)
@@ -106,6 +107,7 @@ class MockDatabaseServiceTests(unittest.TestCase):
         self.assertEqual(loaded.samples[0].sample_type, SampleType.STD)
         self.assertEqual(loaded.samples[0].peaks[0].retention_time, Decimal("2.364"))
         self.assertEqual(loaded.samples[0].peaks[0].area_raw, 24_350)
+        self.assertEqual(loaded.samples[0].total_area, 1_109_240)
         self.assertEqual(loaded.review_status, ReviewStatus.SAVED)
 
     def test_existing_reviewed_rows_are_migrated_to_saved(self) -> None:

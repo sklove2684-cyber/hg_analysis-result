@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -10,7 +11,6 @@ from honyu_app.application.create_excel_export import CreateExcelExportService
 from honyu_app.application.preview_excel_export import PreviewExcelExportService
 from honyu_app.application.review_extraction import ReviewExtractionService
 from honyu_app.domain.enums import ExcelPreviewStatus, SampleType
-from honyu_app.domain.errors import ExcelExportError
 from honyu_app.infrastructure.database.mock_database_service import MockDatabaseService
 from honyu_app.infrastructure.excel.workbook_inspector import XlsxTemplateInspector
 from honyu_app.infrastructure.excel.workbook_validator import XlsxWorkbookValidator
@@ -46,26 +46,13 @@ MIXTURE_TEMPLATE = _find_file("(혼유) 601-690.xlsx")
 
 @unittest.skipUnless(PDF.is_file() and TEMPLATE.is_file(), "디에틸에테르 실제 PDF/XLSX가 없습니다.")
 class DiethylEtherActualFileTests(unittest.TestCase):
-    def _saved_batch(
-        self, database: MockDatabaseService, *, normalize_std3_area: bool = False
-    ):
+    def _saved_batch(self, database: MockDatabaseService):
         batch = LabSolutionsParser().parse(
             PDF,
             analysis_type="디에틸에테르",
             analysis_no_start=152,
             analysis_no_end=153,
         )
-        if normalize_std3_area:
-            std3 = next(
-                sample
-                for sample in batch.samples
-                if sample.sample_type is SampleType.STD and sample.replicate_no == 3
-            )
-            target = next(
-                peak for peak in std3.peaks
-                if peak.material_standard == "Diethyl ether"
-            )
-            target.area_raw = 125000
         review = ReviewExtractionService(database)
         review.complete_review(batch)
         return review.save_batch(batch)
@@ -80,7 +67,7 @@ class DiethylEtherActualFileTests(unittest.TestCase):
         )
         return database, saved, result
 
-    def test_actual_pdf_requires_review_and_never_substitutes_std_numbers(self) -> None:
+    def test_actual_pdf_uses_common_a_b_std_selection_without_area_judgment(self) -> None:
         expected_by_method = {
             "A": {
                 "F4": 26539,
@@ -108,18 +95,22 @@ class DiethylEtherActualFileTests(unittest.TestCase):
                     and row.target_cell in expected_std
                 }
 
-                self.assertFalse(result.can_generate)
-                self.assertEqual(result.error_count, 1)
+                self.assertTrue(result.can_generate, result.issues)
+                self.assertEqual(result.error_count, 0)
                 self.assertEqual(result.mapped_count, 14)
                 self.assertEqual(result.excluded_count, 30)
                 self.assertEqual(mapped, expected_std)
-                issue = next(
-                    issue for issue in result.issues
-                    if issue.code == "STD_LEVEL_REVIEW_REQUIRED"
+                saved_batch = _database.get_batch_detail(_saved.batch_id)
+                std1 = next(
+                    sample for sample in saved_batch.samples
+                    if sample.sample_type is SampleType.STD
+                    and sample.replicate_no == 1
                 )
-                self.assertIn("STD2 Area 62,642", issue.message)
-                self.assertIn("STD3 Area 63,347", issue.message)
-                self.assertIn("자동 대체하지 않았습니다", issue.message)
+                std_target = next(
+                    peak for peak in std1.peaks
+                    if peak.material_standard == "Diethyl ether"
+                )
+                self.assertEqual(std_target.retention_time, Decimal("1.305"))
                 duplicate_recheck = [
                     row
                     for row in result.rows
@@ -132,32 +123,11 @@ class DiethylEtherActualFileTests(unittest.TestCase):
                     duplicate_recheck[0].exclude_reason, "DUPLICATE_STD_SET"
                 )
 
-    def test_actual_pdf_export_is_blocked_until_std_levels_are_confirmed(self) -> None:
+    def test_actual_export_preserves_formulas_styles_merges_and_charts(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             database = MockDatabaseService(root / "diethyl.db")
             saved = self._saved_batch(database)
-            output = root / "diethyl-result.xlsx"
-
-            with self.assertRaisesRegex(
-                ExcelExportError, "검량선 농도 중복 또는 순서 이상"
-            ):
-                CreateExcelExportService(
-                    database,
-                    PreviewExcelExportService(database, XlsxTemplateInspector()),
-                    XlsxXmlCellWriter(),
-                    XlsxWorkbookValidator(),
-                    object(),
-                    recalculate_with_excel=False,
-                ).create(saved.batch_id, TEMPLATE, output, "A", "REGRESSION")
-
-            self.assertFalse(output.exists())
-
-    def test_normal_std_levels_export_preserves_formulas_styles_merges_and_charts(self) -> None:
-        with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            database = MockDatabaseService(root / "diethyl.db")
-            saved = self._saved_batch(database, normalize_std3_area=True)
             output = root / "diethyl-result.xlsx"
 
             result = CreateExcelExportService(
@@ -177,7 +147,7 @@ class DiethylEtherActualFileTests(unittest.TestCase):
             expected = {
                 "F4": 26539,
                 "F5": 62642,
-                "F6": 125000,
+                "F6": 63347,
                 "F7": 280075,
                 "F8": 534342,
             }

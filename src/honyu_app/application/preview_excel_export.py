@@ -59,7 +59,6 @@ STD_REPLICATES = {
     StdMethod.A: (1, 2, 3, 4, 5),
     StdMethod.B: (1, 2, 3, 4, 6),
 }
-DIETHYL_ETHER_STD_AREA_NEAR_DUPLICATE_TOLERANCE = Decimal("0.05")
 LEGACY_RECOVERY_ROW_START = {
     ConcentrationLevel.LOW: 37,
     ConcentrationLevel.MID: 40,
@@ -419,9 +418,6 @@ ACETIC_ACID_TARGET_RETENTION_TIMES = {
 ETHYLENE_GLYCOL_TARGET_RETENTION_TIMES = {
     "Ethylene glycol": Decimal("3.389"),
 }
-DIETHYL_ETHER_TARGET_RETENTION_TIMES = {
-    "Diethyl ether": Decimal("1.305"),
-}
 ACN_TARGET_RETENTION_TIMES = {
     "Acetonitrile": Decimal("2.031"),
 }
@@ -517,9 +513,25 @@ class PreviewExcelExportService:
         excluded_std_samples = self._select_legacy_std_set(
             batch.samples, method, profile, result
         )
-        self._validate_diethyl_ether_std_levels(
-            batch.samples, excluded_std_samples, method, profile, result
+        runtime_target_retention_times = self._runtime_target_retention_times(
+            batch.samples, excluded_std_samples, method, profile
         )
+        if (
+            profile == DIETHYL_ETHER_PROFILE
+            and "Diethyl ether" not in runtime_target_retention_times
+            and any(
+                peak.include_for_excel and peak.material_standard == "Diethyl ether"
+                for sample in batch.samples
+                for peak in sample.peaks
+            )
+        ):
+            result.issues.append(
+                ExcelPreviewIssue(
+                    ValidationSeverity.ERROR,
+                    "STD_TARGET_RT_NOT_FOUND",
+                    "선택된 STD 세트에서 Diethyl ether 기준 RT를 확인할 수 없습니다.",
+                )
+            )
 
         for sample in batch.samples:
             if sample.sample_id in excluded_std_samples:
@@ -541,6 +553,7 @@ class PreviewExcelExportService:
                 profile,
                 worker_rows,
                 target_analysis_numbers,
+                runtime_target_retention_times,
                 result,
             )
         self._detect_target_collisions(result)
@@ -623,92 +636,35 @@ class PreviewExcelExportService:
         )
         return set()
 
-    def _validate_diethyl_ether_std_levels(
-        self,
+    @classmethod
+    def _runtime_target_retention_times(
+        cls,
         samples: list[Sample],
         excluded_sample_ids: set[UUID],
         method: StdMethod,
         profile: TemplateProfile,
-        result: ExcelPreviewResult,
-    ) -> None:
-        """Block suspicious calibration levels without changing the A/B selection.
-
-        LabSolutions reports the target peak concentration as 0.000, so a
-        duplicated standard concentration cannot be read directly from the PDF.
-        For this single-material profile, adjacent selected levels whose target
-        Areas differ by at most 5%, or whose Area order is reversed, require
-        operator review. No STD number is substituted automatically.
-        """
+    ) -> dict[str, Decimal]:
+        """Use an observed STD RT directly; do not average or infer by Area."""
         if profile != DIETHYL_ETHER_PROFILE:
-            return
-        if any(issue.code.startswith("STD_SET_") for issue in result.issues):
-            return
+            return {}
 
-        selected_replicates = self._std_replicates(profile, method)
-        selected_samples = {
-            sample.replicate_no: sample
-            for sample in samples
-            if sample.sample_type is SampleType.STD
-            and sample.sample_id not in excluded_sample_ids
-            and sample.replicate_no in selected_replicates
-        }
-        if set(selected_samples) != set(selected_replicates):
-            return
-
-        areas: list[tuple[int, int]] = []
-        target_rt = DIETHYL_ETHER_TARGET_RETENTION_TIMES["Diethyl ether"]
-        for replicate_no in selected_replicates:
-            peaks = [
-                peak
-                for peak in selected_samples[replicate_no].peaks
-                if peak.include_for_excel
-                and peak.material_standard == "Diethyl ether"
-            ]
-            if not peaks:
-                return
-            selected_peak = min(
-                peaks,
-                key=lambda peak: (
-                    abs(peak.retention_time - target_rt),
-                    peak.peak_no,
-                    -self._applied_area(peak),
-                ),
-            )
-            areas.append((replicate_no, self._applied_area(selected_peak)))
-
-        suspicious: list[str] = []
-        for (previous_no, previous_area), (current_no, current_area) in zip(
-            areas, areas[1:]
-        ):
-            larger = max(previous_area, current_area)
-            relative_difference = (
-                Decimal(abs(current_area - previous_area)) / Decimal(larger)
-                if larger
-                else Decimal(0)
-            )
-            if (
-                current_area <= previous_area
-                or relative_difference
-                <= DIETHYL_ETHER_STD_AREA_NEAR_DUPLICATE_TOLERANCE
-            ):
-                suspicious.append(
-                    f"STD{previous_no} Area {previous_area:,} / "
-                    f"STD{current_no} Area {current_area:,} "
-                    f"(차이 {relative_difference * 100:.2f}%)"
-                )
-
-        if suspicious:
-            result.issues.append(
-                ExcelPreviewIssue(
-                    ValidationSeverity.ERROR,
-                    "STD_LEVEL_REVIEW_REQUIRED",
-                    f"STD 방식 {method.value} 선택 대상에서 검량선 농도 중복 또는 "
-                    "순서 이상이 의심됩니다: "
-                    + "; ".join(suspicious)
-                    + ". STD 번호를 자동 대체하지 않았습니다. 표준액 제조와 "
-                    "선택 방식을 확인하세요.",
-                )
-            )
+        for replicate_no in cls._std_replicates(profile, method):
+            for sample in samples:
+                if (
+                    sample.sample_type is not SampleType.STD
+                    or sample.sample_id in excluded_sample_ids
+                    or sample.replicate_no != replicate_no
+                ):
+                    continue
+                peaks = [
+                    peak
+                    for peak in sample.peaks
+                    if peak.include_for_excel
+                    and peak.material_standard == "Diethyl ether"
+                ]
+                if len(peaks) == 1:
+                    return {"Diethyl ether": peaks[0].retention_time}
+        return {}
 
     @staticmethod
     def _template_profile(
@@ -857,6 +813,7 @@ class PreviewExcelExportService:
         profile: TemplateProfile,
         worker_rows: dict[str, list[int]],
         target_analysis_numbers: set[str],
+        runtime_target_retention_times: dict[str, Decimal],
         result: ExcelPreviewResult,
     ) -> None:
         number_decision = classify_sample_number(
@@ -973,7 +930,7 @@ class PreviewExcelExportService:
             elif profile == ETHYLENE_GLYCOL_PROFILE:
                 target_rt = ETHYLENE_GLYCOL_TARGET_RETENTION_TIMES.get(material)
             elif profile == DIETHYL_ETHER_PROFILE:
-                target_rt = DIETHYL_ETHER_TARGET_RETENTION_TIMES.get(material)
+                target_rt = runtime_target_retention_times.get(material)
             elif profile == ACN_PROFILE:
                 target_rt = ACN_TARGET_RETENTION_TIMES.get(material)
             elif profile == BC_PROFILE:
@@ -988,6 +945,17 @@ class PreviewExcelExportService:
                 target_rt = G3_TARGET_RETENTION_TIMES.get(material)
             else:
                 target_rt = None
+            if target_rt is None and profile == DIETHYL_ETHER_PROFILE:
+                for candidate in peaks:
+                    result.rows.append(
+                        self._row_for_peak(
+                            sample,
+                            candidate,
+                            status=ExcelPreviewStatus.ERROR,
+                            message="STD에서 Diethyl ether 기준 RT를 확인할 수 없습니다.",
+                        )
+                    )
+                continue
             if target_rt is None:
                 ranked_single = sorted(
                     peaks,

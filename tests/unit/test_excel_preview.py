@@ -504,7 +504,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertEqual(std5.status, ExcelPreviewStatus.EXCLUDED)
         self.assertEqual(std5.exclude_reason, "STD_METHOD_B_NOT_SELECTED")
 
-    def test_diethyl_ether_duplicate_std_level_requires_review_without_substitution(self) -> None:
+    def test_diethyl_ether_similar_std_areas_do_not_change_method_a_selection(self) -> None:
         areas = (100, 200, 202, 400, 800, 1200)
         standards = [
             Sample(
@@ -531,7 +531,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         )
         mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
 
-        self.assertFalse(result.can_generate)
+        self.assertTrue(result.can_generate, result.issues)
         self.assertEqual(
             [(row.sample_name, row.target_cell) for row in mapped],
             [
@@ -542,15 +542,78 @@ class ExcelPreviewServiceTests(unittest.TestCase):
                 ("STD5", "F8"),
             ],
         )
-        issue = next(
-            issue for issue in result.issues
-            if issue.code == "STD_LEVEL_REVIEW_REQUIRED"
-        )
-        self.assertIn("STD2 Area 200", issue.message)
-        self.assertIn("STD3 Area 202", issue.message)
-        self.assertIn("자동 대체하지 않았습니다", issue.message)
+        self.assertEqual(result.error_count, 0)
 
-    def test_diethyl_ether_selects_peak_closest_to_confirmed_std_rt(self) -> None:
+    def test_diethyl_ether_single_peak_maps_using_observed_std_rt(self) -> None:
+        standard = Sample(
+            1,
+            "STD1",
+            "STD1",
+            SampleType.STD,
+            replicate_no=1,
+            peaks=[Peak(1, Decimal("1.420"), 100, material_standard="Diethyl ether")],
+        )
+        worker = Sample(
+            2,
+            "152",
+            "152",
+            SampleType.NUMERIC,
+            worker_match_key="152",
+            peaks=[Peak(1, Decimal("1.500"), 123, material_standard="Diethyl ether")],
+        )
+        result = self.service(diethyl_ether_snapshot()).preview_batch(
+            batch([standard, worker], "디에틸에테르"),
+            Path("diethyl-ether-template.xlsx"),
+            "A",
+        )
+        mapped = [
+            row for row in result.rows
+            if row.status is ExcelPreviewStatus.MAPPED and row.sample_name == "152"
+        ]
+
+        self.assertEqual([(row.peak_no, row.target_cell) for row in mapped], [(1, "F19")])
+
+    def test_diethyl_ether_selects_closest_peak_to_observed_std_rt_not_largest_area(self) -> None:
+        standard = Sample(
+            1,
+            "STD1",
+            "STD1",
+            SampleType.STD,
+            replicate_no=1,
+            peaks=[Peak(1, Decimal("1.250"), 100, material_standard="Diethyl ether")],
+        )
+        worker = Sample(
+            2,
+            "152",
+            "152",
+            SampleType.NUMERIC,
+            worker_match_key="152",
+            peaks=[
+                Peak(1, Decimal("1.252"), 123, material_standard="Diethyl ether"),
+                Peak(2, Decimal("1.305"), 9999, material_standard="Diethyl ether"),
+            ],
+        )
+        result = self.service(diethyl_ether_snapshot()).preview_batch(
+            batch([standard, worker], "디에틸에테르"),
+            Path("diethyl-ether-template.xlsx"),
+            "A",
+        )
+        mapped = [
+            row for row in result.rows
+            if row.status is ExcelPreviewStatus.MAPPED and row.sample_name == "152"
+        ]
+        residual = next(
+            row for row in result.rows
+            if row.sample_name == "152" and row.peak_no == 2
+        )
+
+        self.assertEqual([(row.peak_no, row.target_cell) for row in mapped], [(1, "F19")])
+        self.assertEqual(
+            residual.exclude_reason, ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value
+        )
+        self.assertIn("기준 RT 1.250", residual.message or "")
+
+    def test_diethyl_ether_without_std_rt_never_falls_back_to_largest_area(self) -> None:
         worker = Sample(
             1,
             "152",
@@ -558,16 +621,25 @@ class ExcelPreviewServiceTests(unittest.TestCase):
             SampleType.NUMERIC,
             worker_match_key="152",
             peaks=[
-                Peak(1, Decimal("1.305"), 123, material_standard="Diethyl ether"),
-                Peak(2, Decimal("1.410"), 9999, material_standard="Diethyl ether"),
+                Peak(1, Decimal("1.200"), 100, material_standard="Diethyl ether"),
+                Peak(2, Decimal("1.400"), 9999, material_standard="Diethyl ether"),
             ],
         )
-        result = self.service(diethyl_ether_snapshot()).preview_batch(
-            batch([worker], "디에틸에테르"), Path("diethyl-ether-template.xlsx"), "A"
-        )
-        mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
 
-        self.assertEqual([(row.peak_no, row.target_cell) for row in mapped], [(1, "F19")])
+        result = self.service(diethyl_ether_snapshot()).preview_batch(
+            batch([worker], "디에틸에테르"),
+            Path("diethyl-ether-template.xlsx"),
+            "A",
+        )
+
+        self.assertFalse(result.can_generate)
+        self.assertFalse(any(
+            row.status is ExcelPreviewStatus.MAPPED for row in result.rows
+        ))
+        self.assertTrue(all(
+            row.status is ExcelPreviewStatus.ERROR for row in result.rows
+        ))
+        self.assertEqual(result.issues[0].code, "STD_TARGET_RT_NOT_FOUND")
 
     def test_diethyl_ether_rejects_mixture_workbook_with_clear_mismatch(self) -> None:
         source = batch([], "디에틸에테르")

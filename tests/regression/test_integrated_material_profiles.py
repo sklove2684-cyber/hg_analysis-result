@@ -9,7 +9,7 @@ from zipfile import ZipFile
 from honyu_app.application.create_excel_export import CreateExcelExportService
 from honyu_app.application.preview_excel_export import PreviewExcelExportService
 from honyu_app.application.review_extraction import ReviewExtractionService
-from honyu_app.domain.enums import ExcelPreviewStatus
+from honyu_app.domain.enums import ExcelPreviewStatus, ExcludeReason
 from honyu_app.infrastructure.database.mock_database_service import MockDatabaseService
 from honyu_app.infrastructure.excel.workbook_inspector import XlsxTemplateInspector
 from honyu_app.infrastructure.excel.workbook_validator import XlsxWorkbookValidator
@@ -19,7 +19,7 @@ from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
 
 CASES = (
     ("DMF,DMA", "(DMF) 287-296.pdf", "(DMF) 287-296.xlsx", 287, 296, 28, 33),
-    ("스토다드솔벤트", "스토다드솔벤트 705-706.pdf", "스토다드솔벤트 705-706.xlsx", 705, 706, 44, 715),
+    ("스토다드솔벤트", "스토다드솔벤트 705-706.pdf", "스토다드솔벤트 705-706.xlsx", 705, 706, 42, 717),
     ("알콜4", "알콜(4) 422-476.pdf", "(알콜4) 422-476.xlsx", 422, 476, 63, 63),
     (
         "1,2-에폭시프로판(산화프로필렌)",
@@ -64,6 +64,8 @@ ACTUAL_CASES = tuple(
     for analysis_type, pdf, xlsx, start, end, mapped, excluded in CASES
 )
 ALL_FILES_PRESENT = all(pdf.is_file() and xlsx.is_file() for _, pdf, xlsx, *_ in ACTUAL_CASES)
+STODDARD_PDF = _find_file("스토다드솔벤트 705-706.pdf")
+STODDARD_XLSX = _find_file("스토다드솔벤트 705-706.xlsx")
 
 
 @unittest.skipUnless(ALL_FILES_PRESENT, "통합 프로필 실제 PDF/XLSX 9세트가 없습니다.")
@@ -158,8 +160,6 @@ class IntegratedMaterialProfileActualFileTests(unittest.TestCase):
                     ("LOD(area입력)", "F5"): 1109240,
                     ("LOD(area입력)", "G5"): 981002,
                     ("LOD(area입력)", "H5"): 1497,
-                    ("LOD(area입력)", "E19"): 0,
-                    ("LOD(area입력)", "E20"): 0,
                 },
                 "알콜4": {("area입력", "G5"): 34009, ("area입력", "P9"): 524758},
                 "1,2-에폭시프로판(산화프로필렌)": {
@@ -193,6 +193,83 @@ class IntegratedMaterialProfileActualFileTests(unittest.TestCase):
             workbook = XlsxTemplateInspector().inspect(stoddard[2])
             self.assertTrue(workbook.cell("LOD(area입력)", "E5").has_formula)
             self.assertEqual(1109240 - 981002 - 1497, 126741)
+
+
+@unittest.skipUnless(
+    STODDARD_PDF.is_file() and STODDARD_XLSX.is_file(),
+    "스토다드솔벤트 실제 PDF/XLSX가 없습니다.",
+)
+class StoddardNdActualFileTests(unittest.TestCase):
+    def test_zero_worker_area_keeps_original_nd_and_formula_structure(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = MockDatabaseService(root / "stoddard.db")
+            parser = LabSolutionsParser()
+            batch = parser.parse(
+                STODDARD_PDF,
+                analysis_type="스토다드솔벤트",
+                analysis_no_start=705,
+                analysis_no_end=706,
+            )
+            preview_service = PreviewExcelExportService(
+                database, XlsxTemplateInspector()
+            )
+            preview = preview_service.preview_batch(batch, STODDARD_XLSX, "A")
+            zero_rows = [
+                row for row in preview.rows
+                if row.sample_name in {"705", "706"}
+                and row.material == "Stoddard solvent"
+            ]
+
+            self.assertTrue(preview.can_generate, preview.issues)
+            self.assertEqual(preview.mapped_count, 42)
+            self.assertEqual(
+                {(row.target_sheet, row.target_cell) for row in zero_rows},
+                {("LOD(area입력)", "E19"), ("LOD(area입력)", "E20")},
+            )
+            self.assertTrue(
+                all(row.status is ExcelPreviewStatus.EXCLUDED for row in zero_rows)
+            )
+            self.assertTrue(
+                all(
+                    row.exclude_reason
+                    == ExcludeReason.STODDARD_ND_PRESERVED.value
+                    for row in zero_rows
+                )
+            )
+
+            review = ReviewExtractionService(database)
+            review.complete_review(batch)
+            saved = review.save_batch(batch)
+            output = root / "stoddard-result.xlsx"
+            created = CreateExcelExportService(
+                database,
+                preview_service,
+                XlsxXmlCellWriter(),
+                XlsxWorkbookValidator(),
+                object(),
+                recalculate_with_excel=False,
+            ).create(saved.batch_id, STODDARD_XLSX, output, "A", "REGRESSION")
+            before = XlsxTemplateInspector().inspect(STODDARD_XLSX)
+            after = XlsxTemplateInspector().inspect(output)
+
+            self.assertEqual(created.mapped_cell_count, 42)
+            for address in ("E19", "E20"):
+                self.assertEqual(before.cell("LOD(area입력)", address).value, "N.D")
+                self.assertEqual(
+                    after.cell("LOD(area입력)", address).value,
+                    before.cell("LOD(area입력)", address).value,
+                )
+            for address in ("F19", "G19", "F20", "G20"):
+                self.assertTrue(before.cell("LOD(area입력)", address).has_formula)
+                self.assertEqual(
+                    after.cell("LOD(area입력)", address).formula,
+                    before.cell("LOD(area입력)", address).formula,
+                )
+                self.assertNotEqual(
+                    after.cell("LOD(area입력)", address).value_type,
+                    "numeric",
+                )
 
 
 if __name__ == "__main__":

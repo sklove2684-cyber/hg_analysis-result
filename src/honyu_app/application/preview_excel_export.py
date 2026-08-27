@@ -1144,6 +1144,28 @@ class PreviewExcelExportService:
                     f"스토다드솔벤트 Excel 입력 열이 없습니다: {material}",
                 )
                 continue
+            if (
+                sample.sample_type in {SampleType.NUMERIC, SampleType.UNKNOWN}
+                and material == "Stoddard solvent"
+                and area == 0
+            ):
+                sheet = self._target_sheet(profile, sample)
+                address = f"{column}{row}"
+                cell = snapshot.cell(sheet, address)
+                result.rows.append(
+                    self._row_for_peak(
+                        sample,
+                        synthetic,
+                        target_sheet=sheet,
+                        target_cell=address,
+                        existing_value_type=cell.value_type,
+                        existing_has_formula=cell.has_formula,
+                        status=ExcelPreviewStatus.EXCLUDED,
+                        exclude_reason=ExcludeReason.STODDARD_ND_PRESERVED.value,
+                        message="계산 Area가 0이므로 원본 Excel의 N.D 셀을 수정하지 않음",
+                    )
+                )
+                continue
             self._append_mapped_row(
                 result, snapshot, profile, sample, synthetic, column, row
             )

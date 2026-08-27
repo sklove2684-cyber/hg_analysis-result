@@ -970,6 +970,148 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertTrue(result.can_generate, result.issues)
         self.assertEqual(mapped, {"F4": 1000, "G4": 700, "H4": 50})
 
+    @staticmethod
+    def _stoddard_source(worker_total: int) -> AnalysisBatch:
+        std = Sample(
+            1,
+            "STD1",
+            "STD1",
+            SampleType.STD,
+            replicate_no=1,
+            total_area=1000,
+            peaks=[
+                Peak(1, Decimal("2.620"), 700, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=1),
+                Peak(2, Decimal("3.000"), 50, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=1),
+            ],
+        )
+        worker = Sample(
+            2,
+            "1",
+            "1",
+            SampleType.NUMERIC,
+            worker_match_key="1",
+            total_area=worker_total,
+            peaks=[
+                Peak(1, Decimal("2.620"), 700, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=2),
+                Peak(2, Decimal("3.000"), 50, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=2),
+            ],
+        )
+        return batch([std, worker], "스토다드솔벤트")
+
+    @staticmethod
+    def _stoddard_worker_snapshot() -> ExcelTemplateSnapshot:
+        return ExcelTemplateSnapshot(
+            Path("stoddard.xlsx"),
+            MEK_SHEETS,
+            {
+                ("LOD(area입력)", "D2"): TemplateCell(
+                    "LOD(area입력)", "D2", True, "Stoddard solvent", "string"
+                ),
+                ("LOD(area입력)", "A19"): TemplateCell(
+                    "LOD(area입력)", "A19", True, "261-1", "string"
+                ),
+                ("LOD(area입력)", "E19"): TemplateCell(
+                    "LOD(area입력)", "E19", True, "N.D", "string"
+                ),
+                ("LOD(area입력)", "F19"): TemplateCell(
+                    "LOD(area입력)", "F19", True, "#VALUE!", "formula", "E19*2"
+                ),
+            },
+        )
+
+    def test_stoddard_zero_worker_area_preserves_original_nd_cell(self) -> None:
+        template = self._stoddard_worker_snapshot()
+        result = self.service(template).preview_batch(
+            self._stoddard_source(750), Path("stoddard.xlsx"), "A"
+        )
+        worker = next(
+            row for row in result.rows
+            if row.sample_name == "1" and row.material == "Stoddard solvent"
+        )
+
+        self.assertTrue(result.can_generate, result.issues)
+        self.assertEqual(worker.applied_area, 0)
+        self.assertEqual(worker.status, ExcelPreviewStatus.EXCLUDED)
+        self.assertEqual(
+            worker.exclude_reason, ExcludeReason.STODDARD_ND_PRESERVED.value
+        )
+        self.assertEqual(worker.target_cell, "E19")
+        self.assertIn("N.D", worker.message)
+        self.assertEqual(template.cell("LOD(area입력)", "E19").value, "N.D")
+        self.assertTrue(template.cell("LOD(area입력)", "F19").has_formula)
+        self.assertNotIn(
+            ("LOD(area입력)", "E19", 0),
+            [
+                (row.target_sheet, row.target_cell, row.applied_area)
+                for row in result.rows
+                if row.status is ExcelPreviewStatus.MAPPED
+            ],
+        )
+
+    def test_stoddard_positive_worker_area_is_still_mapped_as_number(self) -> None:
+        result = self.service(self._stoddard_worker_snapshot()).preview_batch(
+            self._stoddard_source(800), Path("stoddard.xlsx"), "A"
+        )
+        worker = next(
+            row for row in result.rows
+            if row.sample_name == "1" and row.material == "Stoddard solvent"
+        )
+
+        self.assertTrue(result.can_generate, result.issues)
+        self.assertEqual(worker.applied_area, 50)
+        self.assertEqual(worker.status, ExcelPreviewStatus.MAPPED)
+        self.assertEqual(worker.target_cell, "E19")
+
+    def test_stoddard_std2_total_cs2_residual_regression_is_unchanged(self) -> None:
+        template = ExcelTemplateSnapshot(
+            Path("stoddard.xlsx"),
+            MEK_SHEETS,
+            {
+                ("LOD(area입력)", "D2"): TemplateCell(
+                    "LOD(area입력)", "D2", True, "Stoddard solvent", "string"
+                )
+            },
+        )
+        std2 = Sample(
+            1,
+            "STD2",
+            "STD2",
+            SampleType.STD,
+            replicate_no=2,
+            total_area=1_109_240,
+            peaks=[
+                Peak(1, Decimal("2.620"), 981_002, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=1),
+                Peak(2, Decimal("3.000"), 1_497, material_raw=None,
+                     material_standard=None, include_for_excel=False,
+                     exclude_reason=ExcludeReason.UNNAMED_PEAK, source_page=1),
+            ],
+        )
+        result = self.service(template).preview_batch(
+            batch([std2], "스토다드솔벤트"), Path("stoddard.xlsx"), "A"
+        )
+        mapped = {
+            row.target_cell: row.applied_area
+            for row in result.rows
+            if row.status is ExcelPreviewStatus.MAPPED
+        }
+
+        self.assertTrue(result.can_generate, result.issues)
+        self.assertEqual(
+            mapped,
+            {"F5": 1_109_240, "G5": 981_002, "H5": 1_497},
+        )
+        self.assertEqual(mapped["F5"] - mapped["G5"] - mapped["H5"], 126_741)
+
     def test_one_column_ignores_formula_rows_that_mirror_worker_numbers(self) -> None:
         template = one_column_snapshot(
             TemplateCell("area입력", "A23", True, "262-124", "string"),

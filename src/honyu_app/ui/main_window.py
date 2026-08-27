@@ -186,6 +186,7 @@ class MainWindow(QMainWindow):
         database_page.review_requested.connect(lambda _: self.navigation.setCurrentRow(1))
         database_page.excel_requested.connect(excel_page.load_batch)
         database_page.excel_requested.connect(lambda _: self.navigation.setCurrentRow(3))
+        excel_page.creation_completed.connect(lambda: self.navigation.setCurrentRow(0))
 
         self.pages.addWidget(registration_page)
         self.pages.addWidget(review_page)

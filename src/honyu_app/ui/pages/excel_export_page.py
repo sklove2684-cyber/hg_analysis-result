@@ -100,6 +100,8 @@ class ExcelCreationWorker(QObject):
 
 
 class ExcelExportPage(QWidget):
+    creation_completed = Signal()
+
     def __init__(
         self,
         database: DatabaseService,
@@ -471,6 +473,7 @@ class ExcelExportPage(QWidget):
             )
         set_status_tone(self.status, "success")
         QMessageBox.information(self, "Excel 생성 완료", message)
+        self.creation_completed.emit()
 
     @Slot(str)
     def _on_creation_failed(self, detail: str) -> None:

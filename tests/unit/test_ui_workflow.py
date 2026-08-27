@@ -427,6 +427,71 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
         self.assertTrue(page.excel_button.isEnabled())
         page.deleteLater()
 
+    @staticmethod
+    def _completed_excel_result():
+        return SimpleNamespace(
+            recalculated=False,
+            mapped_cell_count=3,
+            output_path=Path("result.xlsx"),
+        )
+
+    def test_excel_creation_success_ok_navigates_to_pdf_registration(self) -> None:
+        window = MainWindow(None, LabSolutionsParser(), self.database)
+        window.navigation.currentRowChanged.disconnect(window._refresh_storage_for_page)
+        window.navigation.setCurrentRow(3)
+        registration = window._registration_page
+        registration.workplace.blockSignals(True)
+        registration.workplace.addItem("작업장-유지")
+        registration.workplace.setCurrentText("작업장-유지")
+        registration.workplace.blockSignals(False)
+        registration.final_path.setText(r"C:\exports\keep")
+
+        with patch.object(
+            QMessageBox,
+            "information",
+            return_value=QMessageBox.StandardButton.Ok,
+        ):
+            window._excel_page._on_creation_completed(self._completed_excel_result())
+
+        self.assertEqual(window.navigation.currentRow(), 0)
+        self.assertEqual(window.pages.currentIndex(), 0)
+        self.assertEqual(registration.workplace.currentText(), "작업장-유지")
+        self.assertEqual(registration.final_path.text(), r"C:\exports\keep")
+        window.deleteLater()
+
+    def test_excel_creation_failure_keeps_excel_page_selected(self) -> None:
+        window = MainWindow(None, LabSolutionsParser(), self.database)
+        window.navigation.currentRowChanged.disconnect(window._refresh_storage_for_page)
+        window.navigation.setCurrentRow(3)
+
+        with patch.object(
+            QMessageBox,
+            "critical",
+            return_value=QMessageBox.StandardButton.Ok,
+        ):
+            window._excel_page._on_creation_failed("test failure")
+
+        self.assertEqual(window.navigation.currentRow(), 3)
+        self.assertEqual(window.pages.currentIndex(), 3)
+        window.deleteLater()
+
+    def test_excel_success_does_not_navigate_before_completion_popup_closes(self) -> None:
+        window = MainWindow(None, LabSolutionsParser(), self.database)
+        window.navigation.currentRowChanged.disconnect(window._refresh_storage_for_page)
+        window.navigation.setCurrentRow(3)
+        observed_rows = []
+
+        def observe_popup(*_args):
+            observed_rows.append(window.navigation.currentRow())
+            return QMessageBox.StandardButton.Ok
+
+        with patch.object(QMessageBox, "information", side_effect=observe_popup):
+            window._excel_page._on_creation_completed(self._completed_excel_result())
+
+        self.assertEqual(observed_rows, [3])
+        self.assertEqual(window.navigation.currentRow(), 0)
+        window.deleteLater()
+
     def test_saved_batch_can_be_reopened_and_sent_to_excel(self) -> None:
         batch = make_batch(file_hash="c" * 64, batch_code="SAVED-BATCH")
         saved = self.database.save_analysis_batch(SaveAnalysisBatchCommand(batch))

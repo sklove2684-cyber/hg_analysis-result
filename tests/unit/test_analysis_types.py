@@ -251,6 +251,8 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
         self.assertEqual(infer_analysis_type("MEK 74-119.pdf"), "MEK")
         self.assertEqual(infer_analysis_type("메탄올 74-119.pdf"), "메탄올A")
         self.assertEqual(infer_analysis_type("ACN 74-119.pdf"), "ACN")
+        self.assertEqual(infer_analysis_type("초산 489-530.pdf"), "초산")
+        self.assertEqual(infer_analysis_type("acetic acid 489-530.pdf"), "초산")
         self.assertEqual(infer_analysis_type("(IPA) 320-334.pdf"), "IPA")
         self.assertEqual(infer_analysis_type("IPA 320-334.pdf"), "IPA")
         self.assertEqual(
@@ -273,6 +275,7 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
         expected = {
             "MEK 74-119.pdf": "MEK",
             "ACN 656-666.pdf": "ACN",
+            "초산 489-530.pdf": "초산",
             "알콜(2) 74-119.pdf": "(알콜2) IBA,1-BTOH",
             "1컬럼혼유 120-130.pdf": "1컬럼혼유",
             "G3 혼유 695-696.pdf": "(혼유-G3) 1,2-디클로로에틸렌,퍼클로로에틸렌,프로판,에탄",

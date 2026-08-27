@@ -364,6 +364,61 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
         review.deleteLater()
         excel.deleteLater()
 
+    def test_filename_analysis_mismatch_blocks_extraction(self) -> None:
+        registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
+        pdf = Path(self.temp.name) / "ACN 516-534.pdf"
+        pdf.touch()
+        registration.pdf_path.setText(str(pdf))
+        registration.analysis_type.setCurrentText("메틸클로라이드(Chloromethane)")
+        registration.start_no.setValue(516)
+        registration.end_no.setValue(534)
+
+        with patch.object(QThread, "start") as start:
+            registration.start_extraction()
+
+        start.assert_not_called()
+        self.assertIsNone(registration._thread)
+        self.assertIn("PDF 파일명은 ACN으로 판별", registration.extraction_status.text())
+        self.assertIn("메틸클로라이드", registration.extraction_status.text())
+        registration.deleteLater()
+
+    def test_matching_filename_analysis_starts_extraction(self) -> None:
+        registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
+        pdf = Path(self.temp.name) / "ACN 516-534.pdf"
+        pdf.touch()
+        registration.pdf_path.setText(str(pdf))
+        registration.analysis_type.setCurrentText("ACN")
+        registration.start_no.setValue(516)
+        registration.end_no.setValue(534)
+
+        with patch.object(QThread, "start") as start:
+            registration.start_extraction()
+
+        start.assert_called_once_with()
+        self.assertIsNotNone(registration._thread)
+        self.assertEqual(registration.extraction_status.text(), "PDF 내용을 분석하고 있습니다...")
+        registration._worker = None
+        registration._thread = None
+        registration.deleteLater()
+
+    def test_unknown_filename_allows_manually_selected_analysis_type(self) -> None:
+        registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
+        pdf = Path(self.temp.name) / "sample 516-534.pdf"
+        pdf.touch()
+        registration.pdf_path.setText(str(pdf))
+        registration.analysis_type.setCurrentText("피리딘")
+        registration.start_no.setValue(516)
+        registration.end_no.setValue(534)
+
+        with patch.object(QThread, "start") as start:
+            registration.start_extraction()
+
+        start.assert_called_once_with()
+        self.assertIsNotNone(registration._thread)
+        registration._worker = None
+        registration._thread = None
+        registration.deleteLater()
+
     def test_main_window_does_not_wait_for_slow_shared_folder_check(self) -> None:
         local = Path(self.temp.name) / "exports"
         local.mkdir()
@@ -435,16 +490,47 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
             output_path=Path("result.xlsx"),
         )
 
+    @staticmethod
+    def _select_page_without_storage_refresh(window: MainWindow, index: int) -> None:
+        window.navigation.blockSignals(True)
+        window.navigation.setCurrentRow(index)
+        window.navigation.blockSignals(False)
+        window._change_page(index)
+
     def test_excel_creation_success_ok_navigates_to_pdf_registration(self) -> None:
         window = MainWindow(None, LabSolutionsParser(), self.database)
-        window.navigation.currentRowChanged.disconnect(window._refresh_storage_for_page)
-        window.navigation.setCurrentRow(3)
+        self._select_page_without_storage_refresh(window, 3)
         registration = window._registration_page
         registration.workplace.blockSignals(True)
         registration.workplace.addItem("작업장-유지")
         registration.workplace.setCurrentText("작업장-유지")
         registration.workplace.blockSignals(False)
+        registration.year.blockSignals(True)
+        registration.year.setValue(2031)
+        registration.year.blockSignals(False)
+        registration.half.blockSignals(True)
+        registration.half.setCurrentText("하반기")
+        registration.half.blockSignals(False)
+        registration.period_path.setText("기간경로-유지")
+        registration._final_folder = Path(r"C:\exports\keep")
         registration.final_path.setText(r"C:\exports\keep")
+        registration.pdf_path.setText(r"C:\input\old.pdf")
+        registration.analysis_type.setCurrentText("ACN")
+        registration._analysis_type_user_selected = True
+        registration.start_no.setValue(516)
+        registration.end_no.setValue(534)
+        registration.progress.setRange(0, 100)
+        registration.progress.setValue(77)
+        registration.extraction_status.setText("이전 추출 완료")
+        review = window.pages.widget(1)
+        review.load_batch(make_batch(batch_code="OLD-REVIEW"))
+        window._excel_page._result = SimpleNamespace(can_generate=True)
+        window._excel_page.batch_combo.addItem("이전 배치", uuid4())
+        window._excel_page.batch_combo.setCurrentIndex(
+            window._excel_page.batch_combo.count() - 1
+        )
+        window._excel_page.template_path.setText(r"C:\input\old.xlsx")
+        window._excel_page.output_path.setText(r"C:\output\old-result.xlsx")
 
         with patch.object(
             QMessageBox,
@@ -455,14 +541,29 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
 
         self.assertEqual(window.navigation.currentRow(), 0)
         self.assertEqual(window.pages.currentIndex(), 0)
+        self.assertEqual(registration.pdf_path.text(), "")
+        self.assertEqual(registration.analysis_type.currentIndex(), -1)
+        self.assertEqual((registration.start_no.value(), registration.end_no.value()), (1, 1))
+        self.assertEqual((registration.progress.minimum(), registration.progress.maximum()), (0, 1))
+        self.assertEqual(registration.progress.value(), 0)
+        self.assertIn("PDF를 선택", registration.extraction_status.text())
+        self.assertIsNone(review._batch)
+        self.assertIsNone(window._excel_page._result)
+        self.assertEqual(window._excel_page.batch_combo.currentIndex(), -1)
+        self.assertEqual(window._excel_page.template_path.text(), "")
+        self.assertEqual(window._excel_page.output_path.text(), "")
         self.assertEqual(registration.workplace.currentText(), "작업장-유지")
+        self.assertEqual(registration.year.value(), 2031)
+        self.assertEqual(registration.half.currentText(), "하반기")
+        self.assertEqual(registration.period_path.text(), "기간경로-유지")
+        self.assertEqual(registration._final_folder, Path(r"C:\exports\keep"))
         self.assertEqual(registration.final_path.text(), r"C:\exports\keep")
+        self.assertIsNone(window._storage_thread)
         window.deleteLater()
 
     def test_excel_creation_failure_keeps_excel_page_selected(self) -> None:
         window = MainWindow(None, LabSolutionsParser(), self.database)
-        window.navigation.currentRowChanged.disconnect(window._refresh_storage_for_page)
-        window.navigation.setCurrentRow(3)
+        self._select_page_without_storage_refresh(window, 3)
 
         with patch.object(
             QMessageBox,
@@ -477,8 +578,7 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
 
     def test_excel_success_does_not_navigate_before_completion_popup_closes(self) -> None:
         window = MainWindow(None, LabSolutionsParser(), self.database)
-        window.navigation.currentRowChanged.disconnect(window._refresh_storage_for_page)
-        window.navigation.setCurrentRow(3)
+        self._select_page_without_storage_refresh(window, 3)
         observed_rows = []
 
         def observe_popup(*_args):

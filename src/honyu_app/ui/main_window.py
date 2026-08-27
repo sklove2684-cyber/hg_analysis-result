@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
         self._shared_folder_controller = shared_folder_controller
         self._storage_thread: QThread | None = None
         self._storage_worker: SharedFolderCheckWorker | None = None
+        self._skip_storage_refresh_once = False
 
         root = QWidget()
         root.setObjectName("appRoot")
@@ -186,7 +187,7 @@ class MainWindow(QMainWindow):
         database_page.review_requested.connect(lambda _: self.navigation.setCurrentRow(1))
         database_page.excel_requested.connect(excel_page.load_batch)
         database_page.excel_requested.connect(lambda _: self.navigation.setCurrentRow(3))
-        excel_page.creation_completed.connect(lambda: self.navigation.setCurrentRow(0))
+        excel_page.creation_completed.connect(self._return_to_new_analysis)
 
         self.pages.addWidget(registration_page)
         self.pages.addWidget(review_page)
@@ -244,8 +245,20 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def _refresh_storage_for_page(self, index: int) -> None:
+        if index == 0 and self._skip_storage_refresh_once:
+            self._skip_storage_refresh_once = False
+            return
         if index in {0, 3, 4}:
             self.start_background_initialization()
+
+    @Slot()
+    def _return_to_new_analysis(self) -> None:
+        self._registration_page.reset_for_new_analysis()
+        self._skip_storage_refresh_once = True
+        if self.navigation.currentRow() == 0:
+            self._skip_storage_refresh_once = False
+            return
+        self.navigation.setCurrentRow(0)
 
     def _change_page(self, index: int) -> None:
         if not 0 <= index < len(PAGES):

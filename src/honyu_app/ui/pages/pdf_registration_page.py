@@ -323,6 +323,21 @@ class PdfRegistrationPage(QWidget):
             # the previous review/batch/template state before another extract.
             self.new_work_started.emit(current_pdf)
 
+    def reset_for_new_analysis(self) -> None:
+        """Clear completed-job state without changing storage location settings."""
+        self.pdf_path.clear()
+        self.analysis_type.setCurrentIndex(-1)
+        self._analysis_type_user_selected = False
+        self.start_no.setValue(1)
+        self.end_no.setValue(1)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.extraction_status.setText("PDF를 선택하면 추출을 시작할 수 있습니다.")
+        set_status_tone(self.extraction_status, "neutral")
+        self.extract_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
+        self.new_work_started.emit(None)
+
     def start_extraction(self) -> None:
         path = Path(self.pdf_path.text())
         if not path.is_file():
@@ -336,6 +351,15 @@ class PdfRegistrationPage(QWidget):
         if not self.analysis_type.currentText().strip():
             self.extraction_status.setText("분석 종류를 확인해 선택하세요.")
             set_status_tone(self.extraction_status, "warning")
+            return
+        detected = self.detect_analysis_type(path.name)
+        selected = self.analysis_type.currentText().strip()
+        if detected is not None and detected != selected:
+            self.extraction_status.setText(
+                f"PDF 파일명은 {detected}으로 판별되지만 "
+                f"현재 분석종류는 {selected}입니다. 확인하세요."
+            )
+            set_status_tone(self.extraction_status, "error")
             return
         self._thread = QThread(self)
         self._worker = PdfExtractionWorker(

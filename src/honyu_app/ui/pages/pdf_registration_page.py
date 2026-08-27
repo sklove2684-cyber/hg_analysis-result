@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QSpinBox,
@@ -399,10 +400,30 @@ class PdfRegistrationPage(QWidget):
                 return
             existing = self._database.get_batch_detail(duplicate.existing_batch_id)
             if existing.analysis_type != batch.analysis_type:
-                self.extraction_status.setText(
-                    "동일 PDF의 기존 DB 배치가 현재 분석 종류와 달라 자동 선택하지 않았습니다."
+                answer = QMessageBox.question(
+                    self,
+                    "기존 분석종류 교체",
+                    "동일 PDF가 다른 분석종류로 저장되어 있습니다.\n\n"
+                    f"기존: {existing.analysis_type}\n"
+                    f"새 분석종류: {batch.analysis_type}\n\n"
+                    "기존 분석종류를 새 분석종류로 교체하고 "
+                    "Sample/Peak 데이터를 재저장할까요?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
                 )
-                set_status_tone(self.extraction_status, "warning")
+                if answer != QMessageBox.StandardButton.Yes:
+                    self.extraction_status.setText(
+                        "기존 DB 배치 교체를 취소했습니다. 저장된 데이터는 변경되지 않았습니다."
+                    )
+                    set_status_tone(self.extraction_status, "warning")
+                    return
+                batch.replacement_for_batch_id = duplicate.existing_batch_id
+                self.extraction_status.setText(
+                    "기존 분석종류 교체를 확인했습니다. "
+                    "추출 결과를 검토한 뒤 DB에 저장하세요."
+                )
+                set_status_tone(self.extraction_status, "success")
+                self.extraction_ready.emit(batch)
                 return
             existing.review_status = ReviewStatus.SAVED
             self.extraction_status.setText(

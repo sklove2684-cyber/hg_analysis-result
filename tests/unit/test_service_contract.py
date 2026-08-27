@@ -9,6 +9,7 @@ class DatabaseServiceContractTests(unittest.TestCase):
             "check_connection",
             "check_duplicate",
             "save_analysis_batch",
+            "replace_analysis_batch",
             "search_batches",
             "get_batch_detail",
             "add_peak_correction",

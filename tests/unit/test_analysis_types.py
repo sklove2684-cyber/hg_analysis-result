@@ -251,6 +251,14 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
         self.assertEqual(infer_analysis_type("MEK 74-119.pdf"), "MEK")
         self.assertEqual(infer_analysis_type("메탄올 74-119.pdf"), "메탄올A")
         self.assertEqual(infer_analysis_type("ACN 74-119.pdf"), "ACN")
+        self.assertEqual(infer_analysis_type("(IPA) 320-334.pdf"), "IPA")
+        self.assertEqual(infer_analysis_type("IPA 320-334.pdf"), "IPA")
+        self.assertEqual(
+            infer_analysis_type("unknown.pdf", method_filenames=("IPA",)), "IPA"
+        )
+        self.assertEqual(
+            infer_analysis_type("MEK 74-119.pdf", materials=("IPA",)), "MEK"
+        )
         self.assertEqual(
             infer_analysis_type("알콜(2) 74-119.pdf"), "(알콜2) IBA,1-BTOH"
         )
@@ -260,3 +268,16 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
         )
         self.assertIsNone(infer_analysis_type("알콜 1-10.pdf"))
         self.assertEqual(infer_analysis_type("1컬럼혼유 120-130.pdf"), "1컬럼혼유")
+
+    def test_ipa_token_detection_does_not_override_other_analysis_types(self) -> None:
+        expected = {
+            "MEK 74-119.pdf": "MEK",
+            "ACN 656-666.pdf": "ACN",
+            "알콜(2) 74-119.pdf": "(알콜2) IBA,1-BTOH",
+            "1컬럼혼유 120-130.pdf": "1컬럼혼유",
+            "G3 혼유 695-696.pdf": "(혼유-G3) 1,2-디클로로에틸렌,퍼클로로에틸렌,프로판,에탄",
+        }
+        for filename, analysis_type in expected.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(infer_analysis_type(filename), analysis_type)
+        self.assertIsNone(infer_analysis_type("isopropyl acetate 320-334.pdf"))

@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from contextlib import closing
 import sqlite3
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from honyu_app.domain.commands import (
@@ -151,6 +152,56 @@ class MockDatabaseServiceTests(unittest.TestCase):
             self.service.save_analysis_batch(SaveAnalysisBatchCommand(batch))
         self.assertFalse(self.service.check_duplicate(batch.source_file.file_hash).is_duplicate)
         self.assertEqual(self.service.search_batches(BatchSearchQuery()), [])
+
+    def test_replace_same_pdf_keeps_one_batch_and_replaces_samples_and_peaks(self) -> None:
+        original = make_batch()
+        saved = self.service.save_analysis_batch(SaveAnalysisBatchCommand(original))
+        replacement = make_batch(batch_code="IPA-001")
+        replacement.analysis_type = "IPA"
+        replacement.samples[0].sample_name_raw = "STD-NEW"
+        replacement.samples[0].sample_name_normalized = "STD-NEW"
+        replacement.samples[0].peaks[0].material_raw = "IPA"
+        replacement.samples[0].peaks[0].material_standard = "Isopropyl alcohol"
+        replacement.samples[0].peaks[0].area_raw = 98_765
+
+        result = self.service.replace_analysis_batch(
+            saved.batch_id, SaveAnalysisBatchCommand(replacement)
+        )
+
+        self.assertEqual(result.batch_id, saved.batch_id)
+        self.assertEqual(len(self.service.search_batches(BatchSearchQuery())), 1)
+        loaded = self.service.get_batch_detail(saved.batch_id)
+        self.assertEqual(loaded.analysis_type, "IPA")
+        self.assertEqual(loaded.batch_code, "IPA-001")
+        self.assertEqual(loaded.samples[0].sample_name_raw, "STD-NEW")
+        self.assertEqual(loaded.samples[0].peaks[0].area_raw, 98_765)
+        self.assertEqual(
+            loaded.samples[0].peaks[0].material_standard, "Isopropyl alcohol"
+        )
+
+    def test_replace_rolls_back_original_batch_when_new_sample_insert_fails(self) -> None:
+        original = make_batch()
+        saved = self.service.save_analysis_batch(SaveAnalysisBatchCommand(original))
+        replacement = make_batch(batch_code="IPA-ROLLBACK")
+        replacement.analysis_type = "IPA"
+
+        with patch.object(
+            self.service,
+            "_insert_sample",
+            side_effect=sqlite3.IntegrityError("forced replacement failure"),
+        ):
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.service.replace_analysis_batch(
+                    saved.batch_id, SaveAnalysisBatchCommand(replacement)
+                )
+
+        loaded = self.service.get_batch_detail(saved.batch_id)
+        self.assertEqual(loaded.analysis_type, "혼유")
+        self.assertEqual(loaded.batch_code, "BATCH-001")
+        self.assertEqual(len(loaded.samples), 1)
+        self.assertEqual(loaded.samples[0].sample_name_raw, "STD1")
+        self.assertEqual(loaded.samples[0].peaks[0].area_raw, 24_350)
+        self.assertEqual(len(self.service.search_batches(BatchSearchQuery())), 1)
 
     def test_correction_preserves_area_raw_and_revisions(self) -> None:
         batch = make_batch()

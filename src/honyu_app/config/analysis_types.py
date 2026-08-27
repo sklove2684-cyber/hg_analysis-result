@@ -372,6 +372,7 @@ def infer_analysis_type(
     materials: tuple[str, ...] = (),
 ) -> str | None:
     evidence = " ".join((filename, *method_filenames, *materials)).casefold()
+    filename_evidence = filename.casefold()
     # Specific names precede broad families. Short or ambiguous names are not guessed.
     rules: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("(혼유-G2) THF,CFM,벤젠,클로로벤젠", ("혼유-g2",)),
@@ -405,7 +406,11 @@ def infer_analysis_type(
     )
     if "iba" in evidence and any(token in evidence for token in ("1-btoh", "n-btoh")):
         return "(알콜2) IBA,1-BTOH"
+    if re.search(r"(?<![0-9a-z])ipa(?![0-9a-z])", filename_evidence):
+        return "IPA"
     for display_name, tokens in rules:
         if any(token in evidence for token in tokens):
             return display_name
+    if re.search(r"(?<![0-9a-z])ipa(?![0-9a-z])", evidence):
+        return "IPA"
     return None

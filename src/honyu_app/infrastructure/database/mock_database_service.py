@@ -19,6 +19,7 @@ from honyu_app.domain.errors import (
     DuplicateSourceFileError,
     RecordNotFoundError,
     RevisionConflictError,
+    ValidationError,
 )
 from honyu_app.domain.models import AnalysisBatch, Peak, PeakCorrection, Sample, SourceFile
 from honyu_app.domain.queries import BatchSearchQuery
@@ -163,6 +164,84 @@ class MockDatabaseService:
                 raise DuplicateSourceFileError("동일한 PDF 해시가 이미 저장되어 있습니다.") from exc
             raise
         return SaveAnalysisBatchResult(batch.batch_id, batch.batch_code, True)
+
+    def replace_analysis_batch(
+        self, existing_batch_id: UUID, command: SaveAnalysisBatchCommand
+    ) -> SaveAnalysisBatchResult:
+        """Atomically replace one saved extraction while preserving its DB identity."""
+        batch = command.batch
+        now = _now().isoformat()
+        try:
+            with self._connect() as connection:
+                # Lock before validating the hash so another writer cannot create
+                # or replace a competing row between validation and update.
+                connection.execute("BEGIN IMMEDIATE")
+                existing = connection.execute(
+                    """
+                    SELECT b.batch_id, f.file_hash
+                    FROM analysis_batches b
+                    JOIN source_files f ON f.batch_id = b.batch_id
+                    WHERE b.batch_id = ?
+                    """,
+                    (str(existing_batch_id),),
+                ).fetchone()
+                if existing is None:
+                    raise RecordNotFoundError(
+                        f"교체할 분석 배치를 찾을 수 없습니다: {existing_batch_id}"
+                    )
+                if existing["file_hash"] != batch.source_file.file_hash:
+                    raise ValidationError(
+                        "기존 배치와 새 추출 결과의 PDF 해시가 다릅니다."
+                    )
+
+                connection.execute(
+                    """
+                    UPDATE analysis_batches SET
+                        batch_code = ?, analysis_type = ?, analysis_no_start = ?,
+                        analysis_no_end = ?, parser_name = ?, parser_version = ?,
+                        parser_layout_id = ?, extracted_at = ?, warning_count = ?,
+                        review_status = ?, workplace = ?, year = ?, period = ?,
+                        device_id = ?, analyst = ?, updated_at = ?
+                    WHERE batch_id = ?
+                    """,
+                    (
+                        batch.batch_code, batch.analysis_type, batch.analysis_no_start,
+                        batch.analysis_no_end, batch.parser_name, batch.parser_version,
+                        batch.parser_layout_id, batch.extracted_at.isoformat(),
+                        batch.warning_count, ReviewStatus.SAVED.value, batch.workplace,
+                        batch.year, batch.period, batch.device_id, batch.analyst, now,
+                        str(existing_batch_id),
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE source_files SET
+                        original_name = ?, full_path = ?, file_size = ?, page_count = ?
+                    WHERE batch_id = ?
+                    """,
+                    (
+                        batch.source_file.original_name,
+                        str(batch.source_file.full_path),
+                        batch.source_file.file_size,
+                        batch.source_file.page_count,
+                        str(existing_batch_id),
+                    ),
+                )
+                # Old corrections cascade through peaks.  Export records describe
+                # the old analysis and must not remain attached to the replacement.
+                connection.execute(
+                    "DELETE FROM export_jobs WHERE batch_id = ?", (str(existing_batch_id),)
+                )
+                connection.execute(
+                    "DELETE FROM samples WHERE batch_id = ?", (str(existing_batch_id),)
+                )
+                for sample in batch.samples:
+                    self._insert_sample(connection, existing_batch_id, sample, now)
+        except sqlite3.IntegrityError as exc:
+            if "batch_code" in str(exc) or "analysis_batches.batch_code" in str(exc):
+                raise ValidationError("새 DB 배치 이름이 이미 존재합니다.") from exc
+            raise
+        return SaveAnalysisBatchResult(existing_batch_id, batch.batch_code, True)
 
     @staticmethod
     def _insert_sample(

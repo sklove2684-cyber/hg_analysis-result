@@ -87,6 +87,9 @@ class AnalysisBatch:
     device_id: str | None = None
     analyst: str | None = None
     batch_id: UUID = field(default_factory=uuid4)
+    # Set only after the user explicitly approves replacing a saved batch for
+    # the same source PDF.  This is workflow metadata and is not persisted.
+    replacement_for_batch_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

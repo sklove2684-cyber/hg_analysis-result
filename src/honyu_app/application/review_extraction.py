@@ -112,10 +112,22 @@ class ReviewExtractionService:
             raise ValidationError("사용자 검토 완료 후에만 DB에 저장할 수 있습니다.")
         duplicate = self._database.check_duplicate(batch.source_file.file_hash)
         if duplicate.is_duplicate:
-            raise ValidationError(
-                f"동일 PDF가 이미 저장되어 있습니다: {duplicate.existing_batch_code}"
+            if (
+                batch.replacement_for_batch_id is None
+                or duplicate.existing_batch_id != batch.replacement_for_batch_id
+            ):
+                raise ValidationError(
+                    f"동일 PDF가 이미 저장되어 있습니다: {duplicate.existing_batch_code}"
+                )
+            result = self._database.replace_analysis_batch(
+                batch.replacement_for_batch_id, SaveAnalysisBatchCommand(batch)
             )
-        result = self._database.save_analysis_batch(SaveAnalysisBatchCommand(batch))
+            batch.batch_id = result.batch_id
+            batch.replacement_for_batch_id = None
+        else:
+            if batch.replacement_for_batch_id is not None:
+                raise ValidationError("교체할 기존 DB 배치를 찾을 수 없습니다.")
+            result = self._database.save_analysis_batch(SaveAnalysisBatchCommand(batch))
         batch.review_status = ReviewStatus.SAVED
         return result
 

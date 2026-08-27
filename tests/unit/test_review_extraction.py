@@ -88,3 +88,44 @@ class ReviewExtractionServiceTests(unittest.TestCase):
         self.assertIn("material_raw", text)
         self.assertIn("material_standard", text)
         self.assertIn("새물질,Toluene", text)
+
+    def test_confirmed_replacement_reuses_existing_batch_without_duplicate(self) -> None:
+        original = review_batch()
+        original.samples[0].peaks[0].material_standard = "Toluene"
+        original.samples[0].peaks[0].exclude_reason = None
+        original.samples[0].peaks[0].include_for_excel = True
+        original.review_status = ReviewStatus.REVIEWED
+        saved = self.service.save_batch(original)
+
+        replacement = review_batch()
+        replacement.batch_code = "IPA-REPLACED"
+        replacement.analysis_type = "IPA"
+        replacement.samples[0].peaks[0].material_raw = "IPA"
+        replacement.samples[0].peaks[0].material_standard = "Isopropyl alcohol"
+        replacement.samples[0].peaks[0].exclude_reason = None
+        replacement.samples[0].peaks[0].include_for_excel = True
+        replacement.review_status = ReviewStatus.REVIEWED
+        replacement.replacement_for_batch_id = saved.batch_id
+
+        result = self.service.save_batch(replacement)
+
+        self.assertEqual(result.batch_id, saved.batch_id)
+        self.assertEqual(replacement.batch_id, saved.batch_id)
+        self.assertIsNone(replacement.replacement_for_batch_id)
+        loaded = self.database.get_batch_detail(saved.batch_id)
+        self.assertEqual(loaded.analysis_type, "IPA")
+        self.assertEqual(loaded.batch_code, "IPA-REPLACED")
+        self.assertEqual(len(self.service.list_saved_batches()), 1)
+
+    def test_duplicate_without_replacement_confirmation_remains_blocked(self) -> None:
+        original = review_batch()
+        original.samples[0].peaks[0].material_standard = "Toluene"
+        original.samples[0].peaks[0].exclude_reason = None
+        original.review_status = ReviewStatus.REVIEWED
+        self.service.save_batch(original)
+        duplicate = review_batch()
+        duplicate.batch_code = "DUPLICATE"
+        duplicate.review_status = ReviewStatus.REVIEWED
+
+        with self.assertRaisesRegex(ValidationError, "동일 PDF"):
+            self.service.save_batch(duplicate)

@@ -18,13 +18,14 @@ SAMPLE_XLSX = Path(__file__).parents[3] / "TEST" / "(혼유) 틀.xlsx"
 if PYSIDE_AVAILABLE:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import QEventLoop, QThread, QTimer
-    from PySide6.QtWidgets import QApplication, QFileDialog
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
     from honyu_app.application.preview_excel_export import PreviewExcelExportService
     from honyu_app.application.review_extraction import ReviewExtractionService
     from honyu_app.domain.commands import SaveAnalysisBatchCommand
     from honyu_app.domain.enums import ReviewStatus
     from honyu_app.domain.models import SourceFile
+    from honyu_app.domain.queries import BatchSearchQuery
     from honyu_app.infrastructure.database.mock_database_service import MockDatabaseService
     from honyu_app.infrastructure.excel.workbook_inspector import XlsxTemplateInspector
     from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
@@ -234,6 +235,71 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
 
         self.assertEqual(source.analysis_type, "IPA")
         self.assertEqual(registration.analysis_type.currentText(), "IPA")
+        registration.deleteLater()
+
+    def test_duplicate_pdf_with_different_type_can_be_confirmed_for_replacement(self) -> None:
+        original = make_batch(file_hash="7" * 64, batch_code="MEK-OLD")
+        original.analysis_type = "MEK"
+        saved = self.database.save_analysis_batch(SaveAnalysisBatchCommand(original))
+        replacement = make_batch(file_hash="7" * 64, batch_code="IPA-NEW")
+        replacement.analysis_type = "IPA"
+        replacement.source_file = SourceFile(
+            original_name="IPA 320-334.pdf",
+            full_path=Path(self.temp.name) / "IPA 320-334.pdf",
+            file_hash=original.source_file.file_hash,
+            file_size=original.source_file.file_size,
+            page_count=original.source_file.page_count,
+        )
+        registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
+        registration.analysis_type.setCurrentText("IPA")
+        registration._mark_analysis_type_user_selected()
+        emitted = []
+        registration.extraction_ready.connect(emitted.append)
+
+        with patch.object(
+            QMessageBox,
+            "question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            registration._on_extraction_completed(replacement)
+
+        self.assertEqual(emitted, [replacement])
+        self.assertEqual(replacement.replacement_for_batch_id, saved.batch_id)
+        self.assertIn("교체를 확인", registration.extraction_status.text())
+        self.assertEqual(len(self.database.search_batches(BatchSearchQuery())), 1)
+        registration.deleteLater()
+
+    def test_duplicate_pdf_replacement_decline_keeps_existing_data(self) -> None:
+        original = make_batch(file_hash="8" * 64, batch_code="MEK-OLD")
+        original.analysis_type = "MEK"
+        saved = self.database.save_analysis_batch(SaveAnalysisBatchCommand(original))
+        replacement = make_batch(file_hash="8" * 64, batch_code="IPA-NEW")
+        replacement.analysis_type = "IPA"
+        replacement.source_file = SourceFile(
+            original_name="IPA 320-334.pdf",
+            full_path=Path(self.temp.name) / "IPA 320-334.pdf",
+            file_hash=original.source_file.file_hash,
+            file_size=original.source_file.file_size,
+            page_count=original.source_file.page_count,
+        )
+        registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
+        registration.analysis_type.setCurrentText("IPA")
+        registration._mark_analysis_type_user_selected()
+        emitted = []
+        registration.extraction_ready.connect(emitted.append)
+
+        with patch.object(
+            QMessageBox,
+            "question",
+            return_value=QMessageBox.StandardButton.No,
+        ):
+            registration._on_extraction_completed(replacement)
+
+        self.assertEqual(emitted, [])
+        self.assertIsNone(replacement.replacement_for_batch_id)
+        loaded = self.database.get_batch_detail(saved.batch_id)
+        self.assertEqual(loaded.analysis_type, "MEK")
+        self.assertEqual(loaded.batch_code, "MEK-OLD")
         registration.deleteLater()
 
     def test_selecting_new_pdf_clears_review_and_excel_work_state(self) -> None:

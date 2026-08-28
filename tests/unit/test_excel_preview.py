@@ -13,6 +13,7 @@ from honyu_app.application.preview_excel_export import (
     ETHYLENE_GLYCOL_PROFILE,
     G2_PROFILE,
     G3_PROFILE,
+    IPA_PROFILE,
     ISOAMYL_N_PROPYL_ACETATE_PROFILE,
     MEK_PROFILE,
     ONE_COLUMN_PROFILE,
@@ -126,6 +127,19 @@ def diethyl_ether_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
     )
     return ExcelTemplateSnapshot(
         Path("diethyl-ether-template.xlsx"),
+        MEK_SHEETS,
+        {(cell.sheet, cell.address): cell for cell in (*headers, *cells)},
+    )
+
+
+def ipa_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
+    headers = (
+        TemplateCell("LOD(area입력)", "I3", True, "IPA", "string"),
+        TemplateCell("LOD(area입력)", "J3", True, "area", "string"),
+        TemplateCell("LOD(area입력)", "E20", True, "261-320", "string"),
+    )
+    return ExcelTemplateSnapshot(
+        Path("ipa-template.xlsx"),
         MEK_SHEETS,
         {(cell.sheet, cell.address): cell for cell in (*headers, *cells)},
     )
@@ -309,7 +323,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertEqual(result.issues[0].code, "STD_SET_INCOMPLETE")
 
     def test_unregistered_analysis_type_has_clear_excel_profile_error(self) -> None:
-        for analysis_type in ("IPA",):
+        for analysis_type in ("메탄올A",):
             with self.subTest(analysis_type=analysis_type):
                 source = batch([])
                 source.analysis_type = analysis_type
@@ -324,6 +338,102 @@ class ExcelPreviewServiceTests(unittest.TestCase):
                     result.issues[0].message,
                 )
                 self.assertIn(analysis_type, result.issues[0].message)
+
+    def test_ipa_profile_uses_common_std_methods_and_runtime_std_rt(self) -> None:
+        def ipa_peak(number: int, rt: str, area: int) -> Peak:
+            return Peak(
+                number,
+                Decimal(rt),
+                area,
+                material_raw="IPA",
+                material_standard="Isopropyl alcohol",
+            )
+
+        standards = [
+            Sample(
+                1,
+                "STD1",
+                "STD1",
+                SampleType.STD,
+                replicate_no=1,
+                peaks=[ipa_peak(1, "3.720", 100), ipa_peak(2, "3.820", 9999)],
+            ),
+            *[
+                Sample(
+                    repeat,
+                    f"STD{repeat}",
+                    f"STD{repeat}",
+                    SampleType.STD,
+                    replicate_no=repeat,
+                    peaks=[ipa_peak(1, "3.721", repeat * 100)],
+                )
+                for repeat in range(2, 7)
+            ],
+        ]
+        recovery = Sample(
+            10,
+            "저1",
+            "저1",
+            SampleType.RECOVERY,
+            concentration_level=ConcentrationLevel.LOW,
+            replicate_no=1,
+            peaks=[ipa_peak(1, "3.722", 500), ipa_peak(2, "3.820", 5000)],
+        )
+        worker = Sample(
+            20,
+            "320",
+            "320",
+            SampleType.NUMERIC,
+            worker_match_key="320",
+            peaks=[ipa_peak(1, "3.719", 600), ipa_peak(2, "3.820", 6000)],
+        )
+        source = batch([*standards, recovery, worker], "IPA")
+        source.analysis_no_start = 320
+        source.analysis_no_end = 334
+
+        for method, expected_j9, mapped_std, excluded_std in (
+            ("A", 500, "STD5", "STD6"),
+            ("B", 600, "STD6", "STD5"),
+        ):
+            with self.subTest(method=method):
+                result = self.service(ipa_snapshot()).preview_batch(
+                    source, Path("ipa-template.xlsx"), method
+                )
+                mapped = {
+                    (row.sample_name, row.target_sheet, row.target_cell): row.applied_area
+                    for row in result.rows
+                    if row.status is ExcelPreviewStatus.MAPPED
+                }
+
+                self.assertTrue(result.can_generate, result.issues)
+                self.assertEqual(mapped[("STD1", "LOD(area입력)", "J5")], 100)
+                self.assertEqual(mapped[("STD4", "LOD(area입력)", "J8")], 400)
+                self.assertEqual(
+                    mapped[(mapped_std, "LOD(area입력)", "J9")], expected_j9
+                )
+                self.assertEqual(mapped[("저1", "회수율", "B28")], 500)
+                self.assertEqual(mapped[("320", "LOD(area입력)", "J20")], 600)
+                excluded = [
+                    row
+                    for row in result.rows
+                    if row.status is ExcelPreviewStatus.EXCLUDED
+                ]
+                self.assertTrue(any(row.sample_name == excluded_std for row in excluded))
+                self.assertTrue(all(
+                    row.applied_area not in {5000, 6000, 9999}
+                    for row in result.rows
+                    if row.status is ExcelPreviewStatus.MAPPED
+                ))
+
+    def test_ipa_rejects_mixture_workbook_with_clear_mismatch(self) -> None:
+        result = self.service(snapshot()).preview_batch(
+            batch([], "IPA"), Path("mixture-template.xlsx"), "A"
+        )
+
+        self.assertFalse(result.can_generate)
+        self.assertEqual(result.issues[0].code, "TEMPLATE_PROFILE_MISMATCH")
+        self.assertIn("IPA", result.issues[0].message)
+        self.assertIn("혼유", result.issues[0].message)
 
     def test_ethylene_glycol_profile_maps_confirmed_cells_and_excludes_std6(self) -> None:
         source = batch([

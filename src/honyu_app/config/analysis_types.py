@@ -168,7 +168,7 @@ ANALYSIS_TYPES: tuple[AnalysisTypeDefinition, ...] = (
     AnalysisTypeDefinition("mixture_one_column", "1컬럼혼유", ONE_COLUMN_MATERIALS, "mixture_one_column"),
     AnalysisTypeDefinition("mek", "MEK", MEK_MATERIALS, "mek"),
     AnalysisTypeDefinition("alcohol_2_iba_1_btoh", "(알콜2) IBA,1-BTOH", ALCOHOL_2_MATERIALS, "alcohol_2"),
-    AnalysisTypeDefinition("ipa", "IPA", IPA_MATERIALS),
+    AnalysisTypeDefinition("ipa", "IPA", IPA_MATERIALS, "ipa"),
     AnalysisTypeDefinition("methanol", "메탄올A", METHANOL_MATERIALS),
     AnalysisTypeDefinition("acn", "ACN", ACN_MATERIALS, "acn"),
     AnalysisTypeDefinition("bc", "B.C", BC_MATERIALS, "bc"),

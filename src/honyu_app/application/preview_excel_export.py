@@ -79,6 +79,7 @@ class TemplateProfile:
     recovery_row_start: dict[ConcentrationLevel, int]
     worker_row_start: int
     worker_row_end: int
+    worker_column: str = "A"
     dibk_std_slots: tuple[str, ...] = ()
     dibk_recovery_slots: tuple[str, ...] = ()
     use_runtime_std_rt: bool = False
@@ -232,6 +233,26 @@ DIETHYL_ETHER_PROFILE = TemplateProfile(
     },
     worker_row_start=19,
     worker_row_end=122,
+    use_runtime_std_rt=True,
+)
+
+IPA_PROFILE = TemplateProfile(
+    key="ipa",
+    name="IPA",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"Isopropyl alcohol": "J"},
+    numeric_columns={"Isopropyl alcohol": "J"},
+    recovery_columns={"Isopropyl alcohol": "B"},
+    std_row_start=5,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=20,
+    worker_row_end=128,
+    worker_column="E",
     use_runtime_std_rt=True,
 )
 
@@ -911,6 +932,12 @@ class PreviewExcelExportService:
                 .casefold()
                 for address in ("F3", "I3")
             )
+            ipa_headers = tuple(
+                str(snapshot.cell(MEK_PROFILE.area_sheet, address).value or "")
+                .strip()
+                .casefold()
+                for address in ("I3", "J3")
+            )
             if primary_header == "acetic acid":
                 profile = ACETIC_ACID_PROFILE
             elif primary_header == "ethylene glycol":
@@ -923,6 +950,8 @@ class PreviewExcelExportService:
                 profile = VINYL_ACETATE_PROFILE
             elif primary_header == "pyridine":
                 profile = PYRIDINE_PROFILE
+            elif ipa_headers == ("ipa", "area"):
+                profile = IPA_PROFILE
             elif alternate_header == "메틸 n-아밀케톤":
                 profile = METHYL_N_AMYL_KETONE_PROFILE
             elif alternate_header == "isopropyl acetate":
@@ -1183,7 +1212,9 @@ class PreviewExcelExportService:
     ) -> dict[str, list[int]]:
         index: dict[str, list[int]] = defaultdict(list)
         for row in range(profile.worker_row_start, profile.worker_row_end + 1):
-            analysis_cell = snapshot.cell(profile.area_sheet, f"A{row}")
+            analysis_cell = snapshot.cell(
+                profile.area_sheet, f"{profile.worker_column}{row}"
+            )
             # Some templates contain a second, calculated table that mirrors the
             # input table.  Its analysis numbers are formulas and must not be
             # treated as writable worker rows.

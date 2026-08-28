@@ -57,6 +57,7 @@ class MaterialNormalizerTests(unittest.TestCase):
             "1,2디클로로프로판": "1,2-Dichloropropane",
             "1,2디클로로에탄": "1,2-Dichloroethane",
             "IPA": "Isopropyl alcohol",
+            "Isopropyl alcohol": "Isopropyl alcohol",
             "메탄올": "Methanol",
             "메탄올A": "Methanol",
             "ACN": "Acetonitrile",

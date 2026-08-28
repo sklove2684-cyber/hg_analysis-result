@@ -1,0 +1,207 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from xml.etree import ElementTree as ET
+from zipfile import ZipFile
+
+from honyu_app.application.create_excel_export import CreateExcelExportService
+from honyu_app.application.preview_excel_export import PreviewExcelExportService
+from honyu_app.application.review_extraction import ReviewExtractionService
+from honyu_app.domain.enums import ExcelPreviewStatus
+from honyu_app.infrastructure.database.mock_database_service import MockDatabaseService
+from honyu_app.infrastructure.excel.workbook_inspector import XlsxTemplateInspector
+from honyu_app.infrastructure.excel.workbook_validator import XlsxWorkbookValidator
+from honyu_app.infrastructure.excel.xml_cell_writer import XlsxXmlCellWriter
+from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
+
+
+MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+
+def _candidate_directories() -> tuple[Path, ...]:
+    configured = os.environ.get("HONYU_METHANOL_TEST_DIR")
+    return tuple(
+        directory
+        for directory in (
+            Path(configured) if configured else None,
+            Path(__file__).parents[3] / "TEST",
+            Path.home() / "Desktop" / "분석프로그램",
+        )
+        if directory is not None
+    )
+
+
+def _find_file(name: str) -> Path:
+    for directory in _candidate_directories():
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return Path()
+
+
+def _merge_ranges(archive: ZipFile) -> dict[str, tuple[str, ...]]:
+    result: dict[str, tuple[str, ...]] = {}
+    for name in archive.namelist():
+        if not name.startswith("xl/worksheets/sheet") or not name.endswith(".xml"):
+            continue
+        root = ET.fromstring(archive.read(name))
+        result[name] = tuple(
+            node.attrib["ref"]
+            for node in root.findall(f".//{{{MAIN}}}mergeCell")
+        )
+    return result
+
+
+PDF = _find_file("(메탄올)A 237-320.pdf")
+TEMPLATE = _find_file("(메탄올)A 237-320.xlsx")
+MIXTURE_TEMPLATE = _find_file("(혼유) 601-690.xlsx")
+
+
+@unittest.skipUnless(
+    PDF.is_file() and TEMPLATE.is_file(), "메탄올A 실제 PDF/XLSX가 없습니다."
+)
+class MethanolActualFileTests(unittest.TestCase):
+    def _saved_batch(self, database: MockDatabaseService):
+        batch = LabSolutionsParser().parse(
+            PDF,
+            analysis_type="메탄올A",
+            analysis_no_start=237,
+            analysis_no_end=320,
+        )
+        self.assertEqual(batch.warning_count, 0)
+        self.assertEqual(
+            sum(
+                peak.exclude_reason is not None
+                and peak.exclude_reason.value == "UNKNOWN_MATERIAL"
+                for sample in batch.samples
+                for peak in sample.peaks
+            ),
+            0,
+        )
+        review = ReviewExtractionService(database)
+        review.complete_review(batch)
+        return review.save_batch(batch)
+
+    def _preview(self, method: str):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        database = MockDatabaseService(Path(temporary.name) / "methanol.db")
+        saved = self._saved_batch(database)
+        preview = PreviewExcelExportService(
+            database, XlsxTemplateInspector()
+        ).preview(saved.batch_id, TEMPLATE, method)
+        return database, saved, preview
+
+    def test_actual_pdf_maps_confirmed_cells_for_common_std_methods(self) -> None:
+        expected_by_method = {
+            "A": {"F4": 12103, "F5": 24681, "F6": 49392, "F7": 97163, "F8": 198028},
+            "B": {"F4": 12103, "F5": 24681, "F6": 49392, "F7": 97163, "F8": 245337},
+        }
+        for method, expected_std in expected_by_method.items():
+            with self.subTest(method=method):
+                _database, _saved, preview = self._preview(method)
+                mapped = {
+                    (row.target_sheet, row.target_cell): row.applied_area
+                    for row in preview.rows
+                    if row.status is ExcelPreviewStatus.MAPPED
+                }
+
+                self.assertTrue(preview.can_generate, preview.issues)
+                self.assertEqual(preview.error_count, 0)
+                self.assertEqual(preview.mapped_count, 16)
+                self.assertEqual(preview.excluded_count, 77)
+                self.assertEqual(
+                    {
+                        address: mapped[("LOD(area입력)", address)]
+                        for address in expected_std
+                    },
+                    expected_std,
+                )
+                self.assertEqual(mapped[("회수율", "B28")], 23633)
+                self.assertEqual(mapped[("회수율", "B36")], 170194)
+                self.assertEqual(mapped[("LOD(area입력)", "F19")], 1685)
+                self.assertEqual(mapped[("LOD(area입력)", "F20")], 1930)
+
+    def test_actual_export_writes_numbers_and_preserves_workbook_structure(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = MockDatabaseService(root / "methanol.db")
+            saved = self._saved_batch(database)
+            preview_service = PreviewExcelExportService(
+                database, XlsxTemplateInspector()
+            )
+            output = root / "methanol-result.xlsx"
+            result = CreateExcelExportService(
+                database,
+                preview_service,
+                XlsxXmlCellWriter(),
+                XlsxWorkbookValidator(),
+                object(),
+                recalculate_with_excel=False,
+            ).create(
+                saved.batch_id,
+                TEMPLATE,
+                output,
+                "A",
+                "METHANOL-REGRESSION",
+            )
+
+            self.assertTrue(result.validation_passed)
+            self.assertFalse(result.recalculated)
+            self.assertEqual(result.mapped_cell_count, 16)
+            before = XlsxTemplateInspector().inspect(TEMPLATE)
+            after = XlsxTemplateInspector().inspect(output)
+            for address, expected in {
+                "F4": 12103,
+                "F8": 198028,
+                "F19": 1685,
+                "F20": 1930,
+            }.items():
+                cell = after.cell("LOD(area입력)", address)
+                self.assertEqual(cell.value, expected)
+                self.assertEqual(cell.value_type, "numeric")
+            for address, expected in {"B28": 23633, "B36": 170194}.items():
+                cell = after.cell("회수율", address)
+                self.assertEqual(cell.value, expected)
+                self.assertEqual(cell.value_type, "numeric")
+            self.assertEqual(
+                {key: cell.formula for key, cell in before.cells.items() if cell.has_formula},
+                {key: cell.formula for key, cell in after.cells.items() if cell.has_formula},
+            )
+            self.assertEqual(
+                {key: cell.style_id for key, cell in before.cells.items()},
+                {key: cell.style_id for key, cell in after.cells.items()},
+            )
+            with ZipFile(TEMPLATE) as original, ZipFile(output) as generated:
+                self.assertEqual(_merge_ranges(original), _merge_ranges(generated))
+                preserved = tuple(
+                    name
+                    for name in original.namelist()
+                    if name.startswith(("xl/charts/", "xl/drawings/", "xl/media/"))
+                )
+                self.assertTrue(any(name.startswith("xl/charts/") for name in preserved))
+                for name in preserved:
+                    self.assertEqual(original.read(name), generated.read(name), name)
+
+    @unittest.skipUnless(
+        MIXTURE_TEMPLATE.is_file(), "비교용 혼유 Excel 양식이 없습니다."
+    )
+    def test_actual_mixture_workbook_is_rejected_as_profile_mismatch(self) -> None:
+        with TemporaryDirectory() as temporary:
+            database = MockDatabaseService(Path(temporary) / "methanol.db")
+            saved = self._saved_batch(database)
+            result = PreviewExcelExportService(
+                database, XlsxTemplateInspector()
+            ).preview(saved.batch_id, MIXTURE_TEMPLATE, "A")
+
+        self.assertFalse(result.can_generate)
+        self.assertEqual(result.issues[0].code, "TEMPLATE_PROFILE_MISMATCH")
+        self.assertIn("메탄올A", result.issues[0].message)
+        self.assertIn("혼유", result.issues[0].message)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -177,6 +177,7 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
             "MEK",
             "(알콜2) IBA,1-BTOH",
             "IPA",
+            "메탄올A",
             "(혼유-G2) THF,CFM,벤젠,클로로벤젠",
             "이소아밀,n-프로필 아세테이트",
             "셀로솔브",
@@ -208,6 +209,7 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
                 "초산",
                 "ACN",
                 "IPA",
+                "메탄올A",
                 "에틸렌글리콜",
                 "B.C",
                 "디에틸에테르",
@@ -242,6 +244,9 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
 
     def test_ipa_uses_dedicated_excel_profile_key(self) -> None:
         self.assertEqual(excel_profile_key_for("IPA"), "ipa")
+
+    def test_methanol_uses_dedicated_excel_profile_key(self) -> None:
+        self.assertEqual(excel_profile_key_for("메탄올A"), "methanol")
 
     def test_specific_detection_precedes_broad_family_detection(self) -> None:
         self.assertEqual(infer_analysis_type("알콜4 1-10.pdf"), "알콜4")

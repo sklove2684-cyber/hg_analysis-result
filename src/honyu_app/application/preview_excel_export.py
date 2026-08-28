@@ -256,6 +256,27 @@ IPA_PROFILE = TemplateProfile(
     use_runtime_std_rt=True,
 )
 
+
+METHANOL_PROFILE = TemplateProfile(
+    key="methanol",
+    name="메탄올A",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"Methanol": "F"},
+    numeric_columns={"Methanol": "F"},
+    recovery_columns={"Methanol": "B"},
+    std_row_start=4,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=19,
+    worker_row_end=80,
+    use_runtime_std_rt=True,
+)
+
+
 ACN_PROFILE = TemplateProfile(
     key="acn",
     name="ACN",
@@ -942,6 +963,8 @@ class PreviewExcelExportService:
                 profile = ACETIC_ACID_PROFILE
             elif primary_header == "ethylene glycol":
                 profile = ETHYLENE_GLYCOL_PROFILE
+            elif primary_header == "methanol":
+                profile = METHANOL_PROFILE
             elif primary_header == "diethyl ether":
                 profile = DIETHYL_ETHER_PROFILE
             elif primary_header == "methylene chloride":

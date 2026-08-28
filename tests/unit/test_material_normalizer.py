@@ -62,6 +62,7 @@ class MaterialNormalizerTests(unittest.TestCase):
             "메탄올A": "Methanol",
             "ACN": "Acetonitrile",
             "페놀": "Phenol",
+            "Phenol": "Phenol",
             "산화프로필렌": "Propylene oxide",
             "1,2-에폭시프로판": "Propylene oxide",
             "1,2에폭시프로판": "Propylene oxide",

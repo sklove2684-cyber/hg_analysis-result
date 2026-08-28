@@ -179,7 +179,7 @@ ANALYSIS_TYPES: tuple[AnalysisTypeDefinition, ...] = (
         ISOAMYL_N_PROPYL_ACETATE_MATERIALS,
         "isoamyl_n_propyl_acetate",
     ),
-    AnalysisTypeDefinition("phenol", "페놀", PHENOL_MATERIALS),
+    AnalysisTypeDefinition("phenol", "페놀", PHENOL_MATERIALS, "phenol"),
     AnalysisTypeDefinition(
         "propylene_oxide",
         "1,2-에폭시프로판(산화프로필렌)",

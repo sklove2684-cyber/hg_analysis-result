@@ -196,6 +196,7 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
             "비닐아세테이트",
             "이소프로필 아세테이트",
             "피리딘",
+            "페놀",
         ):
             self.assertTrue(has_excel_profile(name), name)
         for name in (
@@ -222,6 +223,7 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
                 "비닐아세테이트",
                 "이소프로필 아세테이트",
                 "피리딘",
+                "페놀",
             }
         ):
             self.assertFalse(has_excel_profile(name), name)
@@ -247,6 +249,9 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
 
     def test_methanol_uses_dedicated_excel_profile_key(self) -> None:
         self.assertEqual(excel_profile_key_for("메탄올A"), "methanol")
+
+    def test_phenol_uses_dedicated_excel_profile_key(self) -> None:
+        self.assertEqual(excel_profile_key_for("페놀"), "phenol")
 
     def test_specific_detection_precedes_broad_family_detection(self) -> None:
         self.assertEqual(infer_analysis_type("알콜4 1-10.pdf"), "알콜4")

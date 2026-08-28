@@ -18,6 +18,7 @@ from honyu_app.application.preview_excel_export import (
     MEK_PROFILE,
     METHANOL_PROFILE,
     ONE_COLUMN_PROFILE,
+    PHENOL_PROFILE,
     PreviewExcelExportService,
 )
 from honyu_app.domain.enums import (
@@ -154,6 +155,18 @@ def methanol_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
     )
     return ExcelTemplateSnapshot(
         Path("methanol-template.xlsx"),
+        MEK_SHEETS,
+        {(cell.sheet, cell.address): cell for cell in (*headers, *cells)},
+    )
+
+
+def phenol_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
+    headers = (
+        TemplateCell("LOD(area입력)", "E2", True, "Phenol", "string"),
+        TemplateCell("LOD(area입력)", "A19", True, "261-256", "string"),
+    )
+    return ExcelTemplateSnapshot(
+        Path("phenol-template.xlsx"),
         MEK_SHEETS,
         {(cell.sheet, cell.address): cell for cell in (*headers, *cells)},
     )
@@ -337,7 +350,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertEqual(result.issues[0].code, "STD_SET_INCOMPLETE")
 
     def test_unregistered_analysis_type_has_clear_excel_profile_error(self) -> None:
-        for analysis_type in ("페놀",):
+        for analysis_type in ("PCE(테트라클로로에틸렌)",):
             with self.subTest(analysis_type=analysis_type):
                 source = batch([])
                 source.analysis_type = analysis_type
@@ -520,6 +533,95 @@ class ExcelPreviewServiceTests(unittest.TestCase):
                     for row in result.rows
                     if row.status is ExcelPreviewStatus.MAPPED
                 ))
+
+    def test_phenol_profile_uses_common_std_methods_and_runtime_std_rt(self) -> None:
+        def phenol_peak(number: int, rt: str, area: int) -> Peak:
+            return Peak(
+                number,
+                Decimal(rt),
+                area,
+                material_raw="페놀",
+                material_standard="Phenol",
+            )
+
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[phenol_peak(1, "2.754", repeat * 100)],
+            )
+            for repeat in range(1, 7)
+        ]
+        recovery = Sample(
+            10,
+            "저1",
+            "저1",
+            SampleType.RECOVERY,
+            concentration_level=ConcentrationLevel.LOW,
+            replicate_no=1,
+            peaks=[phenol_peak(1, "2.755", 500)],
+        )
+        worker = Sample(
+            20,
+            "256",
+            "256",
+            SampleType.NUMERIC,
+            worker_match_key="256",
+            peaks=[
+                phenol_peak(1, "2.756", 600),
+                phenol_peak(2, "2.900", 6000),
+            ],
+        )
+        source = batch([*standards, recovery, worker], "페놀")
+        source.analysis_no_start = 256
+        source.analysis_no_end = 305
+
+        for method, expected_f8, mapped_std, excluded_std in (
+            ("A", 500, "STD5", "STD6"),
+            ("B", 600, "STD6", "STD5"),
+        ):
+            with self.subTest(method=method):
+                result = self.service(phenol_snapshot()).preview_batch(
+                    source, Path("phenol-template.xlsx"), method
+                )
+                mapped = {
+                    (row.sample_name, row.target_sheet, row.target_cell): row.applied_area
+                    for row in result.rows
+                    if row.status is ExcelPreviewStatus.MAPPED
+                }
+
+                self.assertTrue(result.can_generate, result.issues)
+                self.assertEqual(mapped[("STD1", "LOD(area입력)", "F4")], 100)
+                self.assertEqual(mapped[("STD4", "LOD(area입력)", "F7")], 400)
+                self.assertEqual(
+                    mapped[(mapped_std, "LOD(area입력)", "F8")], expected_f8
+                )
+                self.assertEqual(mapped[("저1", "회수율", "B28")], 500)
+                self.assertEqual(mapped[("256", "LOD(area입력)", "F19")], 600)
+                excluded = [
+                    row
+                    for row in result.rows
+                    if row.status is ExcelPreviewStatus.EXCLUDED
+                ]
+                self.assertTrue(any(row.sample_name == excluded_std for row in excluded))
+                self.assertTrue(all(
+                    row.applied_area != 6000
+                    for row in result.rows
+                    if row.status is ExcelPreviewStatus.MAPPED
+                ))
+
+    def test_phenol_rejects_mixture_workbook_with_clear_mismatch(self) -> None:
+        result = self.service(snapshot()).preview_batch(
+            batch([], "페놀"), Path("mixture-template.xlsx"), "A"
+        )
+
+        self.assertFalse(result.can_generate)
+        self.assertEqual(result.issues[0].code, "TEMPLATE_PROFILE_MISMATCH")
+        self.assertIn("페놀", result.issues[0].message)
+        self.assertIn("혼유", result.issues[0].message)
 
     def test_methanol_rejects_mixture_workbook_with_clear_mismatch(self) -> None:
         result = self.service(snapshot()).preview_batch(

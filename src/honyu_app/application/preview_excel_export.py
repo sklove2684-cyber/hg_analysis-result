@@ -277,6 +277,26 @@ METHANOL_PROFILE = TemplateProfile(
 )
 
 
+PHENOL_PROFILE = TemplateProfile(
+    key="phenol",
+    name="페놀",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
+    std_columns={"Phenol": "F"},
+    numeric_columns={"Phenol": "F"},
+    recovery_columns={"Phenol": "B"},
+    std_row_start=4,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=19,
+    worker_row_end=122,
+    use_runtime_std_rt=True,
+)
+
+
 ACN_PROFILE = TemplateProfile(
     key="acn",
     name="ACN",
@@ -965,6 +985,8 @@ class PreviewExcelExportService:
                 profile = ETHYLENE_GLYCOL_PROFILE
             elif primary_header == "methanol":
                 profile = METHANOL_PROFILE
+            elif primary_header == "phenol":
+                profile = PHENOL_PROFILE
             elif primary_header == "diethyl ether":
                 profile = DIETHYL_ETHER_PROFILE
             elif primary_header == "methylene chloride":

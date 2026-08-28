@@ -217,23 +217,33 @@ class ExcelExportPage(QWidget):
 
     def refresh_batches(self) -> None:
         selected = self.batch_combo.currentData()
-        self.batch_combo.clear()
-        for summary in self._database.search_batches(BatchSearchQuery()):
-            label = (
-                f"{summary.batch_code}  ·  {summary.pdf_filename}  ·  "
-                f"{summary.analysis_no_start}-{summary.analysis_no_end}"
-            )
-            self.batch_combo.addItem(label, summary.batch_id)
-        if selected is not None:
-            index = self.batch_combo.findData(selected)
-            if index >= 0:
-                self.batch_combo.setCurrentIndex(index)
+        previous_blocked = self.batch_combo.blockSignals(True)
+        try:
+            self.batch_combo.clear()
+            for summary in self._database.search_batches(BatchSearchQuery()):
+                label = (
+                    f"{summary.batch_code}  ·  {summary.pdf_filename}  ·  "
+                    f"{summary.analysis_no_start}-{summary.analysis_no_end}"
+                )
+                self.batch_combo.addItem(label, summary.batch_id)
+            index = self._find_batch_index(selected) if selected is not None else -1
+            self.batch_combo.setCurrentIndex(index)
+        finally:
+            self.batch_combo.blockSignals(previous_blocked)
+        if selected is not None and self.batch_combo.currentData() is None:
+            self._batch_changed()
 
     def load_batch(self, batch: AnalysisBatch) -> None:
         self.refresh_batches()
-        index = self.batch_combo.findData(batch.batch_id)
+        index = self._find_batch_index(batch.batch_id)
         if index >= 0:
             self.batch_combo.setCurrentIndex(index)
+
+    def _find_batch_index(self, batch_id: UUID) -> int:
+        for index in range(self.batch_combo.count()):
+            if self.batch_combo.itemData(index) == batch_id:
+                return index
+        return -1
 
     def reset_for_new_work(self, *_args) -> None:
         self._result = None

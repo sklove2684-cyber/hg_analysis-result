@@ -144,6 +144,57 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
         )
         page.deleteLater()
 
+    def _save_named_batch(self, batch_code: str, analysis_type: str, file_hash: str):
+        batch = make_batch(file_hash=file_hash, batch_code=batch_code)
+        batch.analysis_type = analysis_type
+        return self.database.save_analysis_batch(SaveAnalysisBatchCommand(batch))
+
+    def test_excel_batch_refresh_keeps_empty_selection_with_existing_batches(self) -> None:
+        self._save_named_batch("PHENOL-OLD", "페놀", "1" * 64)
+        self._save_named_batch("METHANOL-OLD", "메탄올A", "2" * 64)
+
+        page = ExcelExportPage(self.database, None, None)
+
+        self.assertEqual(page.batch_combo.count(), 2)
+        self.assertEqual(page.batch_combo.currentIndex(), -1)
+        self.assertIsNone(page.batch_combo.currentData())
+        page.refresh_batches()
+        self.assertEqual(page.batch_combo.currentIndex(), -1)
+        self.assertIsNone(page.batch_combo.currentData())
+        page.deleteLater()
+
+    def test_excel_batch_refresh_preserves_only_explicit_selection_and_reset_clears_it(self) -> None:
+        first = self._save_named_batch("PHENOL-OLD", "페놀", "3" * 64)
+        second = self._save_named_batch("METHANOL-OLD", "메탄올A", "4" * 64)
+        page = ExcelExportPage(self.database, None, None)
+
+        selected_index = page._find_batch_index(second.batch_id)
+        page.batch_combo.setCurrentIndex(selected_index)
+        self.assertEqual(page.batch_combo.currentData(), second.batch_id)
+
+        page.refresh_batches()
+        self.assertEqual(page.batch_combo.currentData(), second.batch_id)
+        self.assertNotEqual(page.batch_combo.currentData(), first.batch_id)
+
+        page.reset_for_new_work()
+        self.assertEqual(page.batch_combo.currentIndex(), -1)
+        page.refresh_batches()
+        self.assertEqual(page.batch_combo.currentIndex(), -1)
+        self.assertIsNone(page.batch_combo.currentData())
+        page.deleteLater()
+
+    def test_excel_load_batch_selects_only_requested_saved_batch(self) -> None:
+        first = self._save_named_batch("PHENOL-OLD", "페놀", "5" * 64)
+        second = self._save_named_batch("METHANOL-OLD", "메탄올A", "6" * 64)
+        page = ExcelExportPage(self.database, None, None)
+
+        self.assertEqual(page.batch_combo.currentIndex(), -1)
+        page.load_batch(self.database.get_batch_detail(second.batch_id))
+
+        self.assertEqual(page.batch_combo.currentData(), second.batch_id)
+        self.assertNotEqual(page.batch_combo.currentData(), first.batch_id)
+        page.deleteLater()
+
     def test_output_filename_changes_from_alcohol_to_honyu_and_avoids_collision(self) -> None:
         exports = Path(self.temp.name) / "exports"
         exports.mkdir()

@@ -371,8 +371,8 @@ def infer_analysis_type(
     method_filenames: tuple[str, ...] = (),
     materials: tuple[str, ...] = (),
 ) -> str | None:
-    evidence = " ".join((filename, *method_filenames, *materials)).casefold()
     filename_evidence = filename.casefold()
+    auxiliary_evidence = " ".join((*method_filenames, *materials)).casefold()
     # Specific names precede broad families. Short or ambiguous names are not guessed.
     rules: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("(혼유-G2) THF,CFM,벤젠,클로로벤젠", ("혼유-g2",)),
@@ -405,13 +405,25 @@ def infer_analysis_type(
         ("1컬럼혼유", ("1컬럼", "methyl acetate", "c-hexane", "n-heptane", "isobutyl acetate")),
         ("혼유", ("혼유",)),
     )
-    if "iba" in evidence and any(token in evidence for token in ("1-btoh", "n-btoh")):
+    # A clear source filename identifies the job. Method names and detected
+    # materials are only fallback evidence; co-detected solvents/internal
+    # standards must never override the filename-selected analysis type.
+    if "iba" in filename_evidence and any(
+        token in filename_evidence for token in ("1-btoh", "n-btoh")
+    ):
         return "(알콜2) IBA,1-BTOH"
     if re.search(r"(?<![0-9a-z])ipa(?![0-9a-z])", filename_evidence):
         return "IPA"
     for display_name, tokens in rules:
-        if any(token in evidence for token in tokens):
+        if any(token in filename_evidence for token in tokens):
             return display_name
-    if re.search(r"(?<![0-9a-z])ipa(?![0-9a-z])", evidence):
+    if "iba" in auxiliary_evidence and any(
+        token in auxiliary_evidence for token in ("1-btoh", "n-btoh")
+    ):
+        return "(알콜2) IBA,1-BTOH"
+    for display_name, tokens in rules:
+        if any(token in auxiliary_evidence for token in tokens):
+            return display_name
+    if re.search(r"(?<![0-9a-z])ipa(?![0-9a-z])", auxiliary_evidence):
         return "IPA"
     return None

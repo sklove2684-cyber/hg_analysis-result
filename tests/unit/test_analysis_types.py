@@ -294,3 +294,26 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assertEqual(infer_analysis_type(filename), analysis_type)
         self.assertIsNone(infer_analysis_type("isopropyl acetate 320-334.pdf"))
+
+    def test_filename_analysis_type_has_priority_over_detected_materials(self) -> None:
+        cases = (
+            ("(페놀) 256-305.pdf", ("MeOH",), "페놀"),
+            ("(메탄올)A 237-320.pdf", ("DMF",), "메탄올A"),
+            ("초산 489-530.pdf", ("Formic acid",), "초산"),
+            ("(IPA) 320-334.pdf", ("2-BTOH",), "IPA"),
+        )
+        for filename, materials, expected in cases:
+            with self.subTest(filename=filename):
+                self.assertEqual(
+                    infer_analysis_type(filename, materials=materials), expected
+                )
+
+    def test_internal_evidence_is_used_only_when_filename_is_unknown(self) -> None:
+        self.assertEqual(
+            infer_analysis_type(
+                "unknown 256-305.pdf",
+                method_filenames=("unknown.gcm",),
+                materials=("Methanol",),
+            ),
+            "메탄올A",
+        )

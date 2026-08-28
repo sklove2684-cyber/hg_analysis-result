@@ -262,6 +262,33 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
         registration.deleteLater()
         excel.deleteLater()
 
+    def test_filename_detected_phenol_is_not_overridden_by_meoh_peak(self) -> None:
+        batch = make_batch(file_hash="a" * 64, batch_code="페놀-256-305")
+        batch.analysis_type = "페놀"
+        batch.analysis_no_start = 256
+        batch.analysis_no_end = 305
+        batch.source_file = SourceFile(
+            original_name="(페놀) 256-305.pdf",
+            full_path=Path(self.temp.name) / "(페놀) 256-305.pdf",
+            file_hash=batch.source_file.file_hash,
+            file_size=batch.source_file.file_size,
+            page_count=batch.source_file.page_count,
+        )
+        batch.samples[0].peaks[0].material_raw = "MeOH"
+        batch.samples[0].peaks[0].material_standard = "Methanol"
+        registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
+        registration.analysis_type.setCurrentText("페놀")
+        emitted = []
+        registration.extraction_ready.connect(emitted.append)
+
+        registration._on_extraction_completed(batch)
+
+        self.assertEqual(batch.analysis_type, "페놀")
+        self.assertEqual(batch.batch_code, "페놀-256-305")
+        self.assertEqual(registration.analysis_type.currentText(), "페놀")
+        self.assertEqual(emitted, [batch])
+        registration.deleteLater()
+
     def test_analysis_type_combo_uses_registry_and_manual_choice_wins(self) -> None:
         from honyu_app.config.analysis_types import ANALYSIS_TYPE_NAMES
 

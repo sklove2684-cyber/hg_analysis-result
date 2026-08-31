@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from honyu_app.application.create_excel_export import CreateExcelExportService
+from honyu_app.application.environment_diagnostics import EnvironmentDiagnosticService
 from honyu_app.application.preview_excel_export import PreviewExcelExportService
 from honyu_app.application.review_extraction import ReviewExtractionService
 from honyu_app.application.shared_folder import SharedFolderController
@@ -169,7 +170,10 @@ class MainWindow(QMainWindow):
         excel_page = ExcelExportPage(
             database, preview_service, create_service, shared_folder_controller
         )
-        settings_page = SettingsPage(shared_folder_controller)
+        settings_page = SettingsPage(
+            shared_folder_controller,
+            EnvironmentDiagnosticService(database),
+        )
         self._registration_page = registration_page
         self._excel_page = excel_page
         self._settings_page = settings_page
@@ -188,6 +192,8 @@ class MainWindow(QMainWindow):
         database_page.excel_requested.connect(excel_page.load_batch)
         database_page.excel_requested.connect(lambda _: self.navigation.setCurrentRow(3))
         excel_page.creation_completed.connect(self._return_to_new_analysis)
+        registration_page.pdf_path.textChanged.connect(settings_page.set_selected_pdf)
+        excel_page.template_path.textChanged.connect(settings_page.set_selected_excel)
 
         self.pages.addWidget(registration_page)
         self.pages.addWidget(review_page)
@@ -250,6 +256,8 @@ class MainWindow(QMainWindow):
             return
         if index in {0, 3, 4}:
             self.start_background_initialization()
+        if index == 4:
+            self._settings_page.request_diagnostic_refresh()
 
     @Slot()
     def _return_to_new_analysis(self) -> None:

@@ -257,6 +257,27 @@ IPA_PROFILE = TemplateProfile(
 )
 
 
+IPA_AREA_PROFILE = TemplateProfile(
+    key="ipa",
+    name="IPA",
+    required_sheets=("검량선", "area", "회수율", "std"),
+    area_sheet="area",
+    std_columns={"Isopropyl alcohol": "J"},
+    numeric_columns={"Isopropyl alcohol": "J"},
+    recovery_columns={"Isopropyl alcohol": "B"},
+    std_row_start=5,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=20,
+    worker_row_end=46,
+    worker_column="E",
+    use_runtime_std_rt=True,
+)
+
+
 METHANOL_PROFILE = TemplateProfile(
     key="methanol",
     name="메탄올A",
@@ -1061,7 +1082,21 @@ class PreviewExcelExportService:
                 else:
                     profile = ONE_COLUMN_PROFILE
         elif LEGACY_PROFILE.area_sheet in snapshot.sheet_names:
-            profile = LEGACY_PROFILE
+            area_headers = tuple(
+                str(snapshot.cell(LEGACY_PROFILE.area_sheet, address).value or "")
+                .strip()
+                .casefold()
+                for address in ("I3", "J3")
+            )
+            # The original IPA workbook uses the same physical ``area`` sheet
+            # name as the mixture workbook.  Its material/header pair is the
+            # reliable discriminator and must take precedence over the generic
+            # legacy-mixture fallback.
+            profile = (
+                IPA_AREA_PROFILE
+                if area_headers == ("ipa", "area")
+                else LEGACY_PROFILE
+            )
         else:
             result.issues.append(
                 ExcelPreviewIssue(

@@ -58,6 +58,8 @@ def _merge_ranges(archive: ZipFile) -> dict[str, tuple[str, ...]]:
 PDF = _find_file("(IPA) 320-334.pdf")
 TEMPLATE = _find_file("(IPA) 320-334.xlsx")
 MIXTURE_TEMPLATE = _find_file("(혼유) 601-690.xlsx")
+AREA_PDF = _find_file("IPA 120-167.pdf")
+AREA_TEMPLATE = _find_file("(IPA) 120-167.xlsx")
 
 
 @unittest.skipUnless(PDF.is_file() and TEMPLATE.is_file(), "IPA 실제 PDF/XLSX가 없습니다.")
@@ -193,6 +195,180 @@ class IpaActualFileTests(unittest.TestCase):
         self.assertEqual(result.issues[0].code, "TEMPLATE_PROFILE_MISMATCH")
         self.assertIn("IPA", result.issues[0].message)
         self.assertIn("혼유", result.issues[0].message)
+
+
+@unittest.skipUnless(
+    AREA_PDF.is_file() and AREA_TEMPLATE.is_file(),
+    "기존 area형 IPA 실제 PDF/XLSX가 없습니다.",
+)
+class IpaAreaActualFileTests(unittest.TestCase):
+    def _saved_batch(self, database: MockDatabaseService):
+        batch = LabSolutionsParser().parse(
+            AREA_PDF,
+            analysis_type="IPA",
+            analysis_no_start=120,
+            analysis_no_end=167,
+        )
+        review = ReviewExtractionService(database)
+        review.complete_review(batch)
+        return review.save_batch(batch)
+
+    def _preview(self, method: str):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        database = MockDatabaseService(Path(temporary.name) / "ipa-area.db")
+        saved = self._saved_batch(database)
+        preview = PreviewExcelExportService(
+            database, XlsxTemplateInspector()
+        ).preview(saved.batch_id, AREA_TEMPLATE, method)
+        return database, saved, preview
+
+    def test_actual_area_workbook_maps_confirmed_cells_for_both_std_methods(self) -> None:
+        expected_by_method = {
+            "A": [16195, 32517, 65745, 132189, 274697],
+            "B": [16195, 32517, 65745, 132189, 360598],
+        }
+        expected_recovery = [
+            30718,
+            30658,
+            30475,
+            97861,
+            97862,
+            97349,
+            240974,
+            240796,
+            237157,
+        ]
+        for method in ("A", "B"):
+            with self.subTest(method=method):
+                _database, _saved, preview = self._preview(method)
+                mapped = {
+                    (row.target_sheet, row.target_cell): row.applied_area
+                    for row in preview.rows
+                    if row.status is ExcelPreviewStatus.MAPPED
+                }
+
+                self.assertTrue(preview.can_generate, preview.issues)
+                self.assertEqual(preview.error_count, 0)
+                self.assertEqual(
+                    [mapped[("area", f"J{row}")] for row in range(5, 10)],
+                    expected_by_method[method],
+                )
+                self.assertEqual(
+                    [mapped[("회수율", f"B{row}")] for row in range(28, 37)],
+                    expected_recovery,
+                )
+                self.assertFalse(
+                    any(sheet == "area" and cell.startswith("K") for sheet, cell in mapped)
+                )
+                self.assertEqual(
+                    len(
+                        {
+                            row.target_cell
+                            for row in preview.rows
+                            if row.status is ExcelPreviewStatus.MAPPED
+                            and row.target_sheet == "area"
+                            and row.target_cell is not None
+                            and 20 <= int(row.target_cell[1:]) <= 46
+                        }
+                    ),
+                    len(
+                        {
+                            row.sample_name
+                            for row in preview.rows
+                            if row.status is ExcelPreviewStatus.MAPPED
+                            and row.target_sheet == "area"
+                            and row.target_cell is not None
+                            and 20 <= int(row.target_cell[1:]) <= 46
+                        }
+                    ),
+                )
+                self.assertTrue(
+                    any(
+                        row.applied_area == 1067
+                        and row.status is ExcelPreviewStatus.EXCLUDED
+                        for row in preview.rows
+                    )
+                )
+                self.assertTrue(
+                    any(
+                        row.applied_area == 1171
+                        and row.status is ExcelPreviewStatus.EXCLUDED
+                        for row in preview.rows
+                    )
+                )
+                late_std2 = [
+                    row
+                    for row in preview.rows
+                    if row.sample_name.casefold() == "std2"
+                    and row.exclude_reason == "DUPLICATE_STD_SET"
+                ]
+                self.assertTrue(late_std2)
+
+    def test_actual_area_export_preserves_non_target_content(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = MockDatabaseService(root / "ipa-area.db")
+            saved = self._saved_batch(database)
+            preview_service = PreviewExcelExportService(
+                database, XlsxTemplateInspector()
+            )
+            preview = preview_service.preview(saved.batch_id, AREA_TEMPLATE, "A")
+            output = root / "ipa-area-result.xlsx"
+            result = CreateExcelExportService(
+                database,
+                preview_service,
+                XlsxXmlCellWriter(),
+                XlsxWorkbookValidator(),
+                object(),
+                recalculate_with_excel=False,
+            ).create(saved.batch_id, AREA_TEMPLATE, output, "A", "IPA-AREA-REGRESSION")
+
+            self.assertTrue(result.validation_passed)
+            before = XlsxTemplateInspector().inspect(AREA_TEMPLATE)
+            after = XlsxTemplateInspector().inspect(output)
+            mapped_cells = {
+                (row.target_sheet, row.target_cell)
+                for row in preview.rows
+                if row.status is ExcelPreviewStatus.MAPPED
+            }
+            for row in range(20, 47):
+                before_j = before.cell("area", f"J{row}")
+                after_j = after.cell("area", f"J{row}")
+                if before_j.value == "N.D" and ("area", f"J{row}") not in mapped_cells:
+                    self.assertEqual(after_j.value, "N.D")
+                before_k = before.cell("area", f"K{row}")
+                after_k = after.cell("area", f"K{row}")
+                self.assertEqual(
+                    (after_k.value, after_k.formula, after_k.style_id),
+                    (before_k.value, before_k.formula, before_k.style_id),
+                )
+            for sheet in ("Sheet1", "Sheet2"):
+                self.assertEqual(
+                    {
+                        key: (cell.value, cell.formula, cell.style_id)
+                        for key, cell in before.cells.items()
+                        if key[0] == sheet
+                    },
+                    {
+                        key: (cell.value, cell.formula, cell.style_id)
+                        for key, cell in after.cells.items()
+                        if key[0] == sheet
+                    },
+                )
+            self.assertEqual(
+                {key: cell.formula for key, cell in before.cells.items() if cell.has_formula},
+                {key: cell.formula for key, cell in after.cells.items() if cell.has_formula},
+            )
+            self.assertEqual(
+                {key: cell.style_id for key, cell in before.cells.items()},
+                {key: cell.style_id for key, cell in after.cells.items()},
+            )
+            with ZipFile(AREA_TEMPLATE) as original, ZipFile(output) as generated:
+                self.assertEqual(_merge_ranges(original), _merge_ranges(generated))
+                for name in original.namelist():
+                    if name.startswith(("xl/charts/", "xl/drawings/", "xl/media/")):
+                        self.assertEqual(original.read(name), generated.read(name), name)
 
 
 if __name__ == "__main__":

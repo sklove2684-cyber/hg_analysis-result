@@ -13,6 +13,7 @@ from honyu_app.application.preview_excel_export import (
     ETHYLENE_GLYCOL_PROFILE,
     G2_PROFILE,
     G3_PROFILE,
+    IPA_AREA_PROFILE,
     IPA_PROFILE,
     ISOAMYL_N_PROPYL_ACETATE_PROFILE,
     MEK_PROFILE,
@@ -48,6 +49,7 @@ ONE_COLUMN_SHEETS = ("검량선", "area입력", "회수율", "STD제조", "Sheet
 MEK_SHEETS = ("검량선", "LOD(area입력)", "회수율", "std")
 ACN_SHEETS = ("검량선", "결과입력(area입력)", "회수율", "STD제조")
 G2_SHEETS = ("검량선", "area입력", "회수율", "STD제조", "Sheet1")
+IPA_AREA_SHEETS = ("검량선", "area", "회수율", "std", "Sheet1", "Sheet2")
 
 
 class FakeDatabase:
@@ -143,6 +145,20 @@ def ipa_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
     return ExcelTemplateSnapshot(
         Path("ipa-template.xlsx"),
         MEK_SHEETS,
+        {(cell.sheet, cell.address): cell for cell in (*headers, *cells)},
+    )
+
+
+def ipa_area_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
+    headers = (
+        TemplateCell("area", "I3", True, "IPA", "string"),
+        TemplateCell("area", "J3", True, "area", "string"),
+        TemplateCell("area", "E20", True, "262-120", "string"),
+        TemplateCell("area", "E21", True, "262-121", "string"),
+    )
+    return ExcelTemplateSnapshot(
+        Path("ipa-area-template.xlsx"),
+        IPA_AREA_SHEETS,
         {(cell.sheet, cell.address): cell for cell in (*headers, *cells)},
     )
 
@@ -451,6 +467,175 @@ class ExcelPreviewServiceTests(unittest.TestCase):
                     for row in result.rows
                     if row.status is ExcelPreviewStatus.MAPPED
                 ))
+
+    def test_original_area_ipa_profile_maps_cells_by_runtime_rt(self) -> None:
+        self.assertEqual(IPA_AREA_PROFILE.key, "ipa")
+
+        def ipa_peak(number: int, rt: str, area: int) -> Peak:
+            return Peak(
+                number,
+                Decimal(rt),
+                area,
+                material_raw="IPA",
+                material_standard="Isopropyl alcohol",
+            )
+
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=(
+                    [ipa_peak(1, "3.634", 32517), ipa_peak(2, "3.746", 1067)]
+                    if repeat == 2
+                    else [ipa_peak(1, "3.635", area)]
+                ),
+            )
+            for repeat, area in enumerate(
+                (16195, 32517, 65745, 132189, 274697, 360598), start=1
+            )
+        ]
+        recoveries = [
+            Sample(
+                10 + index,
+                name,
+                name,
+                SampleType.RECOVERY,
+                concentration_level=level,
+                replicate_no=replicate,
+                peaks=(
+                    [ipa_peak(1, "3.635", area), ipa_peak(2, "3.746", 1171)]
+                    if name == "저2"
+                    else [ipa_peak(1, "3.635", area)]
+                ),
+            )
+            for index, (name, level, replicate, area) in enumerate(
+                (
+                    ("저1", ConcentrationLevel.LOW, 1, 30718),
+                    ("저2", ConcentrationLevel.LOW, 2, 30658),
+                    ("저3", ConcentrationLevel.LOW, 3, 30475),
+                    ("중1", ConcentrationLevel.MID, 1, 97861),
+                    ("중2", ConcentrationLevel.MID, 2, 97862),
+                    ("중3", ConcentrationLevel.MID, 3, 97349),
+                    ("고1", ConcentrationLevel.HIGH, 1, 240974),
+                    ("고2", ConcentrationLevel.HIGH, 2, 240796),
+                    ("고3", ConcentrationLevel.HIGH, 3, 237157),
+                )
+            )
+        ]
+        workers = [
+            Sample(
+                30,
+                "120",
+                "120",
+                SampleType.NUMERIC,
+                worker_match_key="120",
+                peaks=[ipa_peak(1, "3.635", 45123)],
+            ),
+            Sample(
+                31,
+                "121",
+                "121",
+                SampleType.NUMERIC,
+                worker_match_key="121",
+                peaks=[],
+            ),
+        ]
+        source = batch([*standards, *recoveries, *workers], "IPA")
+        source.analysis_no_start = 120
+        source.analysis_no_end = 167
+
+        expected_std = {
+            "A": [16195, 32517, 65745, 132189, 274697],
+            "B": [16195, 32517, 65745, 132189, 360598],
+        }
+        for method in ("A", "B"):
+            with self.subTest(method=method):
+                result = self.service(ipa_area_snapshot()).preview_batch(
+                    source, Path("ipa-area-template.xlsx"), method
+                )
+                mapped = {
+                    (row.target_sheet, row.target_cell): row.applied_area
+                    for row in result.rows
+                    if row.status is ExcelPreviewStatus.MAPPED
+                }
+
+                self.assertTrue(result.can_generate, result.issues)
+                self.assertEqual(
+                    [mapped[("area", f"J{row}")] for row in range(5, 10)],
+                    expected_std[method],
+                )
+                self.assertEqual(
+                    [mapped[("회수율", f"B{row}")] for row in range(28, 37)],
+                    [30718, 30658, 30475, 97861, 97862, 97349, 240974, 240796, 237157],
+                )
+                self.assertEqual(mapped[("area", "J20")], 45123)
+                self.assertNotIn(("area", "J21"), mapped)
+                self.assertFalse(any(sheet == "area" and cell.startswith("K") for sheet, cell in mapped))
+
+    def test_original_area_ipa_prefers_first_complete_std_set_over_late_recheck(self) -> None:
+        def ipa_peak(area: int) -> Peak:
+            return Peak(
+                1,
+                Decimal("3.635"),
+                area,
+                material_raw="IPA",
+                material_standard="Isopropyl alcohol",
+            )
+
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[ipa_peak(repeat * 100)],
+            )
+            for repeat in range(1, 7)
+        ]
+        standards.append(
+            Sample(
+                20,
+                "STD2",
+                "STD2",
+                SampleType.STD,
+                replicate_no=2,
+                peaks=[ipa_peak(99999)],
+            )
+        )
+
+        result = self.service(ipa_area_snapshot()).preview_batch(
+            batch(standards, "IPA"), Path("ipa-area-template.xlsx"), "A"
+        )
+        mapped = {
+            (row.sample_name, row.target_sheet, row.target_cell): row.applied_area
+            for row in result.rows
+            if row.status is ExcelPreviewStatus.MAPPED
+        }
+
+        self.assertTrue(result.can_generate, result.issues)
+        self.assertEqual(mapped[("STD2", "area", "J6")], 200)
+        self.assertNotIn(99999, mapped.values())
+        self.assertTrue(
+            any(
+                row.applied_area == 99999
+                and row.status is ExcelPreviewStatus.EXCLUDED
+                and row.exclude_reason == ExcludeReason.DUPLICATE_STD_SET.value
+                for row in result.rows
+            )
+        )
+
+    def test_area_sheet_without_ipa_headers_remains_legacy_mixture(self) -> None:
+        result = self.service(snapshot()).preview_batch(
+            batch([], "IPA"), Path("mixture-template.xlsx"), "A"
+        )
+
+        self.assertFalse(result.can_generate)
+        self.assertEqual(result.issues[0].code, "TEMPLATE_PROFILE_MISMATCH")
+        self.assertIn("혼유", result.issues[0].message)
 
     def test_methanol_profile_uses_common_std_methods_and_runtime_std_rt(self) -> None:
         def methanol_peak(number: int, rt: str, area: int) -> Peak:

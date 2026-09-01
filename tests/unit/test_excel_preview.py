@@ -16,6 +16,7 @@ from honyu_app.application.preview_excel_export import (
     IPA_AREA_PROFILE,
     IPA_PROFILE,
     ISOAMYL_N_PROPYL_ACETATE_PROFILE,
+    LEGACY_PROFILE,
     MEK_PROFILE,
     METHANOL_PROFILE,
     ONE_COLUMN_PROFILE,
@@ -1216,6 +1217,61 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         )
         self.assertTrue(result.can_generate)
 
+    def test_legacy_material_uses_selected_std_rt_instead_of_largest_area(self) -> None:
+        def material_peak(number: int, rt: str, area: int) -> Peak:
+            return Peak(
+                number,
+                Decimal(rt),
+                area,
+                material_raw="MIBK",
+                material_standard="MIBK",
+            )
+
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[material_peak(1, f"6.02{repeat}", repeat * 100)],
+            )
+            for repeat in range(1, 6)
+        ]
+        worker = Sample(
+            20,
+            "123",
+            "123",
+            SampleType.NUMERIC,
+            worker_match_key="123",
+            peaks=[
+                material_peak(1, "5.722", 2711),
+                material_peak(2, "5.865", 1064),
+            ],
+        )
+        source = batch([*standards, worker])
+        source.analysis_no_start = 123
+        source.analysis_no_end = 123
+        template = snapshot(TemplateCell("area", "A37", True, "262-123", "string"))
+
+        result = self.service(template).preview_batch(
+            source, Path("template.xlsx"), "A"
+        )
+        rows = [row for row in result.rows if row.sample_name == "123"]
+        mapped = [row for row in rows if row.status is ExcelPreviewStatus.MAPPED]
+        excluded = [row for row in rows if row.status is ExcelPreviewStatus.EXCLUDED]
+
+        self.assertTrue(LEGACY_PROFILE.use_runtime_std_rt)
+        self.assertEqual(
+            [(str(row.retention_time), row.applied_area, row.target_cell) for row in mapped],
+            [("5.865", 1064, "I37")],
+        )
+        self.assertEqual(excluded[0].applied_area, 2711)
+        self.assertEqual(
+            excluded[0].exclude_reason,
+            ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value,
+        )
+
     def test_recovery_level_and_replicate_map_to_confirmed_cell(self) -> None:
         recovery = Sample(
             1, "저2", "저2", SampleType.RECOVERY,
@@ -1358,20 +1414,16 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertEqual(result.rows[0].status, ExcelPreviewStatus.ERROR)
         self.assertEqual(result.issues[0].code, "TARGET_IS_FORMULA")
 
-    def test_duplicate_single_material_peaks_select_highest_area(self) -> None:
+    def test_duplicate_std_material_requires_unambiguous_runtime_rt(self) -> None:
         std = Sample(
             1, "STD1", "STD1", SampleType.STD, replicate_no=1,
             peaks=[peak(1, 100), peak(2, 200)],
         )
         result = self.service().preview_batch(batch([std]), Path("template.xlsx"), "A")
-        mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
-        excluded = [row for row in result.rows if row.status is ExcelPreviewStatus.EXCLUDED]
-        self.assertTrue(result.can_generate)
-        self.assertEqual([(row.peak_no, row.target_cell) for row in mapped], [(2, "F15")])
-        self.assertEqual(excluded[0].peak_no, 1)
-        self.assertEqual(
-            excluded[0].exclude_reason,
-            ExcludeReason.MATERIAL_AREA_NOT_TOP1.value,
+        self.assertFalse(result.can_generate)
+        self.assertEqual(result.issues[0].code, "STD_TARGET_RT_NOT_FOUND")
+        self.assertTrue(
+            all(row.status is ExcelPreviewStatus.ERROR for row in result.rows)
         )
 
     def test_one_column_duplicate_material_selects_peak_closest_to_target_rt(self) -> None:

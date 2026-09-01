@@ -5,7 +5,10 @@ import os
 import unittest
 
 from honyu_app.application.review_extraction import ReviewExtractionService
-from honyu_app.application.preview_excel_export import PreviewExcelExportService
+from honyu_app.application.preview_excel_export import (
+    LEGACY_PROFILE,
+    PreviewExcelExportService,
+)
 from honyu_app.domain.enums import ExcelPreviewStatus, ExcludeReason, SampleType, StdMethod
 from honyu_app.domain.errors import ExtractionCancelledError
 from honyu_app.domain.queries import BatchSearchQuery
@@ -377,6 +380,122 @@ class Honyu120167DibkRtRegressionTests(unittest.TestCase):
                         for row in sample_120
                     )
                 )
+
+    def test_actual_123_mibk_uses_closer_std_rt_peak_not_larger_area(self) -> None:
+        for method in ("A", "B"):
+            with self.subTest(method=method):
+                preview = self._preview(method)
+                rows = [
+                    row
+                    for row in preview.rows
+                    if row.sample_type is SampleType.NUMERIC
+                    and row.sample_name.startswith("123-")
+                    and row.material == "MIBK"
+                ]
+                mapped = [
+                    row for row in rows if row.status is ExcelPreviewStatus.MAPPED
+                ]
+                excluded = [
+                    row for row in rows if row.status is ExcelPreviewStatus.EXCLUDED
+                ]
+
+                self.assertEqual(
+                    [
+                        (str(row.retention_time), row.applied_area, row.target_cell)
+                        for row in mapped
+                    ],
+                    [("5.865", 1064, "I38")],
+                )
+                area_2711 = next(row for row in excluded if row.applied_area == 2711)
+                self.assertEqual(str(area_2711.retention_time), "5.722")
+                self.assertEqual(
+                    area_2711.exclude_reason,
+                    ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value,
+                )
+
+    def test_all_actual_duplicate_legacy_materials_use_selected_std_rt(self) -> None:
+        first_standard_by_replicate = {}
+        for sample in self.batch.samples:
+            if sample.sample_type is SampleType.STD and sample.replicate_no is not None:
+                first_standard_by_replicate.setdefault(sample.replicate_no, sample)
+
+        for method, replicates in (
+            ("A", (1, 2, 3, 4, 5)),
+            ("B", (1, 2, 3, 4, 6)),
+        ):
+            with self.subTest(method=method):
+                preview = self._preview(method)
+                targets = {}
+                for material in LEGACY_PROFILE.std_columns:
+                    values = sorted(
+                        peak.retention_time
+                        for replicate in replicates
+                        for peak in first_standard_by_replicate[replicate].peaks
+                        if peak.include_for_excel
+                        and peak.material_standard == material
+                    )
+                    self.assertEqual(len(values), 5, material)
+                    targets[material] = values[2]
+
+                checked = 0
+                for sample in self.batch.samples:
+                    if sample.sample_type is not SampleType.NUMERIC:
+                        continue
+                    if (
+                        not sample.worker_match_key
+                        or not str(sample.worker_match_key).isdigit()
+                        or not 120 <= int(sample.worker_match_key) <= 167
+                    ):
+                        continue
+                    for material, target_rt in targets.items():
+                        candidates = [
+                            peak
+                            for peak in sample.peaks
+                            if peak.include_for_excel
+                            and peak.material_standard == material
+                        ]
+                        if len(candidates) < 2:
+                            continue
+                        checked += 1
+                        expected = min(
+                            candidates,
+                            key=lambda peak: (
+                                abs(peak.retention_time - target_rt),
+                                peak.peak_no,
+                                -peak.area_raw,
+                            ),
+                        )
+                        rows = [
+                            row
+                            for row in preview.rows
+                            if row.sample_name == sample.sample_name_raw
+                            and row.material == material
+                        ]
+                        mapped = [
+                            row
+                            for row in rows
+                            if row.status is ExcelPreviewStatus.MAPPED
+                        ]
+                        self.assertEqual(len(mapped), 1, (sample.sample_name_raw, material))
+                        self.assertEqual(
+                            (mapped[0].peak_no, mapped[0].applied_area),
+                            (expected.peak_no, expected.area_raw),
+                            (sample.sample_name_raw, material),
+                        )
+                        residual = [
+                            row
+                            for row in rows
+                            if row.status is ExcelPreviewStatus.EXCLUDED
+                        ]
+                        self.assertTrue(residual)
+                        self.assertTrue(
+                            all(
+                                row.exclude_reason
+                                == ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value
+                                for row in residual
+                            )
+                        )
+                self.assertGreater(checked, 0)
 
     def test_actual_std_incidental_10_31_rt_never_becomes_a_slot(self) -> None:
         for method, selected_final in (("A", "STD5"), ("B", "STD6")):

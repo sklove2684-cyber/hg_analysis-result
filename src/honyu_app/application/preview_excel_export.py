@@ -85,6 +85,7 @@ class TemplateProfile:
     dibk_std_slots: tuple[str, ...] = ()
     dibk_recovery_slots: tuple[str, ...] = ()
     use_runtime_std_rt: bool = False
+    runtime_rt_required_for_duplicates_only: bool = False
     worker_key_mode: str = "last"
     special_kind: str | None = None
 
@@ -103,6 +104,8 @@ LEGACY_PROFILE = TemplateProfile(
     worker_row_end=183,
     dibk_std_slots=("Z", "AA"),
     dibk_recovery_slots=("U", "V"),
+    use_runtime_std_rt=True,
+    runtime_rt_required_for_duplicates_only=True,
 )
 
 ONE_COLUMN_PROFILE = TemplateProfile(
@@ -786,9 +789,13 @@ class PreviewExcelExportService:
                 for material in profile.std_columns
                 if material not in runtime_target_retention_times
                 and any(
-                    peak.include_for_excel and peak.material_standard == material
+                    sum(
+                        peak.include_for_excel
+                        and peak.material_standard == material
+                        for peak in sample.peaks
+                    )
+                    > (1 if profile.runtime_rt_required_for_duplicates_only else 0)
                     for sample in batch.samples
-                    for peak in sample.peaks
                 )
             ]
             for material in missing_runtime_materials:
@@ -931,9 +938,33 @@ class PreviewExcelExportService:
         method: StdMethod,
         profile: TemplateProfile,
     ) -> dict[str, Decimal]:
-        """Use observed STD RTs directly; do not average or infer by Area."""
+        """Use selected-STD RTs; legacy mixtures use the five-STD median."""
         if not profile.use_runtime_std_rt:
             return {}
+        if profile is LEGACY_PROFILE:
+            selected_replicates = set(cls._std_replicates(profile, method))
+            selected_standards = [
+                sample
+                for sample in samples
+                if sample.sample_type is SampleType.STD
+                and sample.sample_id not in excluded_sample_ids
+                and sample.replicate_no in selected_replicates
+            ]
+            result: dict[str, Decimal] = {}
+            for material in profile.std_columns:
+                observed = []
+                for sample in selected_standards:
+                    peaks = [
+                        peak
+                        for peak in sample.peaks
+                        if peak.include_for_excel
+                        and peak.material_standard == material
+                    ]
+                    if len(peaks) == 1:
+                        observed.append((peaks[0].retention_time, sample.sample_id))
+                if len(observed) == len(selected_standards) and observed:
+                    result[material] = cls._median_rt(observed)
+            return result
         result: dict[str, Decimal] = {}
         for replicate_no in cls._std_replicates(profile, method):
             for sample in samples:
@@ -1532,16 +1563,19 @@ class PreviewExcelExportService:
             else:
                 target_rt = None
             if target_rt is None and profile.use_runtime_std_rt:
-                for candidate in peaks:
-                    result.rows.append(
-                        self._row_for_peak(
-                            sample,
-                            candidate,
-                            status=ExcelPreviewStatus.ERROR,
-                            message=f"STD에서 {material} 기준 RT를 확인할 수 없습니다.",
+                if profile.runtime_rt_required_for_duplicates_only and len(peaks) == 1:
+                    target_rt = None
+                else:
+                    for candidate in peaks:
+                        result.rows.append(
+                            self._row_for_peak(
+                                sample,
+                                candidate,
+                                status=ExcelPreviewStatus.ERROR,
+                                message=f"STD에서 {material} 기준 RT를 확인할 수 없습니다.",
+                            )
                         )
-                    )
-                continue
+                    continue
             if target_rt is None:
                 ranked_single = sorted(
                     peaks,

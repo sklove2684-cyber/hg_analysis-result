@@ -1464,6 +1464,22 @@ class PreviewExcelExportService:
                     )
                 )
             return
+        if (
+            sample.sample_type not in {SampleType.STD, SampleType.RECOVERY}
+            and number_decision.analysis_number is not None
+            and not worker_rows.get(str(number_decision.analysis_number), [])
+        ):
+            for peak in sample.peaks:
+                result.rows.append(
+                    self._row_for_peak(
+                        sample,
+                        peak,
+                        status=ExcelPreviewStatus.EXCLUDED,
+                        exclude_reason=ExcludeReason.WORKER_ROW_NOT_IN_TEMPLATE.value,
+                        message="PDF 분석번호가 Excel 양식에 없어 입력 제외",
+                    )
+                )
+            return
 
         row = self._sample_target_row(
             sample, method, profile, worker_rows, result, number_decision
@@ -1725,12 +1741,6 @@ class PreviewExcelExportService:
         if key is not None:
             matches = worker_rows.get(str(key), []) if key else []
             if not matches:
-                self._sample_error(
-                    result,
-                    sample,
-                    "WORKER_ROW_NOT_FOUND",
-                    f"분석번호 {key}와 일치하는 {profile.area_sheet} 분석번호 행이 없습니다.",
-                )
                 return None
             if len(matches) > 1:
                 self._sample_error(

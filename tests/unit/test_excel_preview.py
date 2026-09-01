@@ -1308,8 +1308,17 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertTrue(okay.can_generate)
         self.assertFalse(failed.can_generate)
         self.assertEqual(failed.issues[0].code, "WORKER_ROW_NOT_UNIQUE")
-        self.assertFalse(not_found.can_generate)
-        self.assertEqual(not_found.issues[0].code, "WORKER_ROW_NOT_FOUND")
+        self.assertTrue(not_found.can_generate)
+        self.assertEqual(not_found.error_count, 0)
+        self.assertEqual(not_found.rows[0].status, ExcelPreviewStatus.EXCLUDED)
+        self.assertEqual(
+            not_found.rows[0].exclude_reason,
+            ExcludeReason.WORKER_ROW_NOT_IN_TEMPLATE.value,
+        )
+        self.assertEqual(
+            not_found.rows[0].message,
+            "PDF 분석번호가 Excel 양식에 없어 입력 제외",
+        )
 
     def test_numeric_sample_outside_batch_and_excel_targets_is_excluded(self) -> None:
         source = batch([
@@ -1338,7 +1347,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
             ],
         )
 
-    def test_missing_excel_row_inside_batch_range_remains_error(self) -> None:
+    def test_missing_excel_row_inside_batch_range_is_excluded(self) -> None:
         source = batch([
             Sample(1, "84", "84", SampleType.NUMERIC, worker_match_key="84", peaks=[peak(1, 100)])
         ])
@@ -1347,8 +1356,13 @@ class ExcelPreviewServiceTests(unittest.TestCase):
 
         result = self.service(snapshot()).preview_batch(source, Path("template.xlsx"), "A")
 
-        self.assertFalse(result.can_generate)
-        self.assertEqual(result.issues[0].code, "WORKER_ROW_NOT_FOUND")
+        self.assertTrue(result.can_generate)
+        self.assertEqual(result.error_count, 0)
+        self.assertEqual(result.rows[0].status, ExcelPreviewStatus.EXCLUDED)
+        self.assertEqual(
+            result.rows[0].exclude_reason,
+            ExcludeReason.WORKER_ROW_NOT_IN_TEMPLATE.value,
+        )
 
     def test_missing_excel_row_with_only_unnamed_peak_is_excluded_not_error(self) -> None:
         unnamed = peak(1, 100)

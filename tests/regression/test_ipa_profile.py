@@ -10,7 +10,7 @@ from zipfile import ZipFile
 from honyu_app.application.create_excel_export import CreateExcelExportService
 from honyu_app.application.preview_excel_export import PreviewExcelExportService
 from honyu_app.application.review_extraction import ReviewExtractionService
-from honyu_app.domain.enums import ExcelPreviewStatus
+from honyu_app.domain.enums import ExcelPreviewStatus, ExcludeReason
 from honyu_app.infrastructure.database.mock_database_service import MockDatabaseService
 from honyu_app.infrastructure.excel.workbook_inspector import XlsxTemplateInspector
 from honyu_app.infrastructure.excel.workbook_validator import XlsxWorkbookValidator
@@ -60,6 +60,14 @@ TEMPLATE = _find_file("(IPA) 320-334.xlsx")
 MIXTURE_TEMPLATE = _find_file("(혼유) 601-690.xlsx")
 AREA_PDF = _find_file("IPA 120-167.pdf")
 AREA_TEMPLATE = _find_file("(IPA) 120-167.xlsx")
+IPA_168_DIR = Path(
+    os.environ.get(
+        "HONYU_IPA_168_213_TEST_DIR",
+        r"\\172.30.1.100\data\분석결과(사업장별)★\양세경\09.01\IPA 168-213",
+    )
+)
+IPA_168_PDF = IPA_168_DIR / "IPA 168-213@완료.pdf"
+IPA_168_TEMPLATE = IPA_168_DIR / "(IPA) 168-213.xlsx"
 
 
 @unittest.skipUnless(PDF.is_file() and TEMPLATE.is_file(), "IPA 실제 PDF/XLSX가 없습니다.")
@@ -369,6 +377,85 @@ class IpaAreaActualFileTests(unittest.TestCase):
                 for name in original.namelist():
                     if name.startswith(("xl/charts/", "xl/drawings/", "xl/media/")):
                         self.assertEqual(original.read(name), generated.read(name), name)
+
+
+@unittest.skipUnless(
+    IPA_168_PDF.is_file() and IPA_168_TEMPLATE.is_file(),
+    "IPA 168-213 실제 PDF/XLSX가 없습니다.",
+)
+class Ipa168213MissingWorkerRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.temporary = TemporaryDirectory()
+        cls.database = MockDatabaseService(Path(cls.temporary.name) / "ipa-168-213.db")
+        batch = LabSolutionsParser().parse(
+            IPA_168_PDF,
+            analysis_type="IPA",
+            analysis_no_start=168,
+            analysis_no_end=213,
+        )
+        review = ReviewExtractionService(cls.database)
+        review.complete_review(batch)
+        cls.saved = review.save_batch(batch)
+        cls.preview_service = PreviewExcelExportService(
+            cls.database, XlsxTemplateInspector()
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.temporary.cleanup()
+
+    def test_missing_pdf_analysis_numbers_are_excluded_without_errors(self) -> None:
+        preview = self.preview_service.preview(
+            self.saved.batch_id, IPA_168_TEMPLATE, "A"
+        )
+        required_missing = {"196", "197", "198", "201", "203", "205", "206", "209"}
+        missing_rows = [
+            row
+            for row in preview.rows
+            if row.exclude_reason == ExcludeReason.WORKER_ROW_NOT_IN_TEMPLATE.value
+        ]
+        excluded_numbers = {
+            number
+            for row in missing_rows
+            for number in required_missing
+            if row.sample_name.startswith(number)
+        }
+
+        self.assertTrue(preview.can_generate, preview.issues)
+        self.assertEqual(preview.error_count, 0)
+        self.assertTrue(required_missing.issubset(excluded_numbers))
+        self.assertTrue(missing_rows)
+        self.assertTrue(
+            all(row.status is ExcelPreviewStatus.EXCLUDED for row in missing_rows)
+        )
+        self.assertTrue(
+            all(
+                row.message == "PDF 분석번호가 Excel 양식에 없어 입력 제외"
+                for row in missing_rows
+            )
+        )
+        self.assertGreater(preview.mapped_count, 0)
+
+    def test_actual_ipa_168_213_excel_creation_succeeds(self) -> None:
+        output = Path(self.temporary.name) / "ipa-168-213-result.xlsx"
+        result = CreateExcelExportService(
+            self.database,
+            self.preview_service,
+            XlsxXmlCellWriter(),
+            XlsxWorkbookValidator(),
+            object(),
+            recalculate_with_excel=False,
+        ).create(
+            self.saved.batch_id,
+            IPA_168_TEMPLATE,
+            output,
+            "A",
+            "IPA-168-213-REGRESSION",
+        )
+
+        self.assertTrue(result.validation_passed)
+        self.assertTrue(output.is_file())
 
 
 if __name__ == "__main__":

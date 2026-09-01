@@ -118,6 +118,18 @@ class CreateExcelExportService:
             except Exception:
                 output.unlink(missing_ok=True)
                 raise
+            final = self._validator.validate(
+                template,
+                output,
+                writes,
+                after_excel_recalculation=recalculated,
+            )
+            if not final.valid:
+                failed = self._preserve_failure(output, output, "최종검증실패")
+                raise WorkbookStructureError(
+                    "최종 Excel 입력값 검증에 실패했습니다. SUCCESS로 처리하지 않았습니다. "
+                    f"점검용 파일: {failed}\n" + "\n".join(final.errors[:10])
+                )
         except Exception:
             if partial.exists():
                 partial.unlink()

@@ -11,7 +11,11 @@ from unittest.mock import patch
 
 from honyu_app.application.create_excel_export import CreateExcelExportService
 from honyu_app.domain.enums import ExcelPreviewStatus, SampleType
-from honyu_app.domain.errors import ExcelExportError, ExcelRecalculationError
+from honyu_app.domain.errors import (
+    ExcelExportError,
+    ExcelRecalculationError,
+    WorkbookStructureError,
+)
 from honyu_app.domain.models import (
     ExcelCellWrite,
     ExcelPreviewResult,
@@ -294,9 +298,80 @@ class ExcelRecalculatorErrorTests(unittest.TestCase):
                 ).create(uuid4(), template, output, "A", "TEST-PC")
 
             self.assertTrue(output.is_file())
-            self.assertEqual(validation_modes, [False, False])
+            self.assertEqual(validation_modes, [False, False, False])
             self.assertFalse(result.recalculated)
             self.assertEqual(list(work.iterdir()), [])
+
+    def test_final_destination_mismatch_is_not_saved_as_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            template = root / "template.xlsx"
+            template.write_bytes(b"template")
+            output = root / "final.xlsx"
+            work = root / "work"
+            diagnostics = root / "diagnostics"
+            validations = 0
+
+            class Preview:
+                def preview(self, *_args):
+                    return ExcelPreviewResult(
+                        template,
+                        "A",
+                        rows=[ExcelPreviewRow(
+                            sample_name="STD1",
+                            sample_type=SampleType.STD,
+                            material="n-hexane",
+                            peak_no=1,
+                            retention_time=Decimal("1.0"),
+                            area_raw=23165,
+                            applied_area=23165,
+                            target_sheet="area",
+                            target_cell="F15",
+                            status=ExcelPreviewStatus.MAPPED,
+                        )],
+                    )
+
+            class Writer:
+                def write_copy(self, _template, partial, _writes):
+                    partial.write_bytes(b"correct before promotion")
+
+            class Validator:
+                def validate(inner_self, *_args, **_kwargs):
+                    nonlocal validations
+                    validations += 1
+                    valid = validations < 3
+                    return type(
+                        "Validation", (),
+                        {"valid": valid, "errors": (() if valid else ("area!F15 expected 23165",))},
+                    )()
+
+            class Database:
+                saved = False
+
+                def save_export_job(inner_self, _command):
+                    inner_self.saved = True
+                    return ExportJobResult(uuid4(), True)
+
+            database = Database()
+            with (
+                patch(
+                    "honyu_app.application.create_excel_export.excel_work_dir",
+                    return_value=work,
+                ),
+                patch(
+                    "honyu_app.application.create_excel_export.failed_exports_dir",
+                    return_value=diagnostics,
+                ),
+            ):
+                with self.assertRaises(WorkbookStructureError) as caught:
+                    CreateExcelExportService(
+                        database, Preview(), Writer(), Validator(), object()
+                    ).create(uuid4(), template, output, "A", "TEST-PC")
+
+            self.assertIn("SUCCESS로 처리하지 않았습니다", str(caught.exception))
+            self.assertFalse(output.exists())
+            self.assertFalse(database.saved)
+            self.assertEqual(len(list(diagnostics.glob("*.xlsx"))), 1)
 
     def test_failed_export_is_kept_out_of_final_output_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

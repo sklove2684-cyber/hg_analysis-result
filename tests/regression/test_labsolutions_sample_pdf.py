@@ -76,7 +76,17 @@ def _company_honyu_file(name: str) -> Path:
     )
 
 
-COMPANY_HONYU_PDF = _company_honyu_file("혼유 120-167.pdf")
+COMPANY_HONYU_PDF = next(
+    (
+        path
+        for path in (
+            _company_honyu_file("혼유 120-167@완료.pdf"),
+            _company_honyu_file("혼유 120-167.pdf"),
+        )
+        if path.is_file()
+    ),
+    Path(),
+)
 COMPANY_HONYU_TEMPLATE = _company_honyu_file("(혼유) 120-167.xlsx")
 COMPANY_HONYU_RESULT = _company_honyu_file("(혼유) 120-167_결과.xlsx")
 
@@ -379,6 +389,41 @@ class Honyu120167DibkRtRegressionTests(unittest.TestCase):
                         and row.target_cell == "Z37"
                         for row in sample_120
                     )
+                )
+
+    def test_completed_pdf_std_source_preview_and_written_cells_are_identical(self) -> None:
+        preview = self._preview("A")
+        expected = {
+            ("STD1", "n-hexane", "F15"): 23165,
+            ("STD1", "MIBK", "I15"): 23917,
+            ("STD1", "DIBK", "Z15"): 18391,
+            ("STD1", "DIBK", "AA15"): 8334,
+            ("STD2", "n-hexane", "F16"): 96957,
+        }
+        mapped = {
+            (row.sample_name, row.material, row.target_cell): row.applied_area
+            for row in preview.rows
+            if row.status is ExcelPreviewStatus.MAPPED
+        }
+        for key, area in expected.items():
+            self.assertEqual(mapped[key], area, key)
+
+        writes = [
+            ExcelCellWrite(row.target_sheet, row.target_cell, row.applied_area)
+            for row in preview.rows
+            if row.status is ExcelPreviewStatus.MAPPED
+        ]
+        with TemporaryDirectory() as temporary:
+            output = Path(temporary) / "completed-pdf-result.xlsx"
+            XlsxXmlCellWriter().write_copy(COMPANY_HONYU_TEMPLATE, output, writes)
+            result = XlsxTemplateInspector().inspect(output)
+            for (_sample, _material, cell), area in expected.items():
+                self.assertEqual(result.cell("area", cell).value, area, cell)
+            for write in writes:
+                self.assertEqual(
+                    result.cell(write.sheet, write.address).value,
+                    write.value,
+                    f"{write.sheet}!{write.address}",
                 )
 
     def test_actual_123_mibk_uses_closer_std_rt_peak_not_larger_area(self) -> None:

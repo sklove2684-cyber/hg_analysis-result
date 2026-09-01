@@ -405,39 +405,100 @@ class Ipa168213MissingWorkerRegressionTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.temporary.cleanup()
 
-    def test_missing_pdf_analysis_numbers_are_excluded_without_errors(self) -> None:
+    def test_rows_196_to_213_are_discovered_and_mapped_by_actual_pdf_peaks(self) -> None:
         preview = self.preview_service.preview(
             self.saved.batch_id, IPA_168_TEMPLATE, "A"
         )
-        required_missing = {"196", "197", "198", "201", "203", "205", "206", "209"}
-        missing_rows = [
-            row
-            for row in preview.rows
-            if row.exclude_reason == ExcludeReason.WORKER_ROW_NOT_IN_TEMPLATE.value
-        ]
-        excluded_numbers = {
-            number
-            for row in missing_rows
-            for number in required_missing
-            if row.sample_name.startswith(number)
+        expected_mapped = {
+            "196": ("J48", "3.749", 1382),
+            "197": ("J49", "3.749", 1374),
+            "198": ("J50", "3.545", 1834),
+            "201": ("J53", "3.625", 1444),
+            "203": ("J55", "3.625", 11565),
+            "205": ("J57", "3.748", 1420),
+            "206": ("J58", "3.547", 9477),
+            "209": ("J61", "3.748", 1475),
+            "212": ("J64", "3.536", 1714),
         }
+        mapped = {
+            number: (row.target_cell, str(row.retention_time), row.applied_area)
+            for row in preview.rows
+            for number in (str(value) for value in range(196, 214))
+            if row.sample_name.startswith(number)
+            and row.material == "Isopropyl alcohol"
+            and row.status is ExcelPreviewStatus.MAPPED
+        }
+        template = XlsxTemplateInspector().inspect(IPA_168_TEMPLATE)
 
         self.assertTrue(preview.can_generate, preview.issues)
         self.assertEqual(preview.error_count, 0)
-        self.assertTrue(required_missing.issubset(excluded_numbers))
-        self.assertTrue(missing_rows)
+        self.assertEqual(mapped, expected_mapped)
+        self.assertEqual(
+            {
+                number: template.cell("area", f"E{number - 148}").value
+                for number in range(196, 214)
+            },
+            {number: f"262-{number}" for number in range(196, 214)},
+        )
+        no_ipa_peak = {str(number) for number in range(196, 214)} - set(expected_mapped)
+        self.assertTrue(no_ipa_peak)
         self.assertTrue(
-            all(row.status is ExcelPreviewStatus.EXCLUDED for row in missing_rows)
+            all(
+                template.cell("area", f"J{int(number) - 148}").value == "N.D"
+                for number in no_ipa_peak
+            )
+        )
+        self.assertFalse(
+            any(
+                row.exclude_reason == ExcludeReason.WORKER_ROW_NOT_IN_TEMPLATE.value
+                and any(
+                    row.sample_name.startswith(str(number))
+                    for number in range(196, 214)
+                )
+                for row in preview.rows
+            )
+        )
+
+        sample_201 = [
+            row
+            for row in preview.rows
+            if row.sample_name.startswith("201-")
+            and row.material == "Isopropyl alcohol"
+        ]
+        self.assertEqual(
+            [
+                (str(row.retention_time), row.applied_area)
+                for row in sample_201
+                if row.status is ExcelPreviewStatus.MAPPED
+            ],
+            [("3.625", 1444)],
         )
         self.assertTrue(
             all(
-                row.message == "PDF 분석번호가 Excel 양식에 없어 입력 제외"
-                for row in missing_rows
+                row.exclude_reason == ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value
+                for row in sample_201
+                if row.status is ExcelPreviewStatus.EXCLUDED
             )
         )
-        self.assertGreater(preview.mapped_count, 0)
 
     def test_actual_ipa_168_213_excel_creation_succeeds(self) -> None:
+        preview = self.preview_service.preview(
+            self.saved.batch_id, IPA_168_TEMPLATE, "A"
+        )
+        mapped_196_213 = {
+            row.target_cell: row.applied_area
+            for row in preview.rows
+            if row.status is ExcelPreviewStatus.MAPPED
+            and any(
+                row.sample_name.startswith(str(number))
+                for number in range(196, 214)
+            )
+        }
+        no_peak_cells = {
+            f"J{number - 148}"
+            for number in range(196, 214)
+            if f"J{number - 148}" not in mapped_196_213
+        }
         output = Path(self.temporary.name) / "ipa-168-213-result.xlsx"
         result = CreateExcelExportService(
             self.database,
@@ -456,6 +517,11 @@ class Ipa168213MissingWorkerRegressionTests(unittest.TestCase):
 
         self.assertTrue(result.validation_passed)
         self.assertTrue(output.is_file())
+        generated = XlsxTemplateInspector().inspect(output)
+        for cell, area in mapped_196_213.items():
+            self.assertEqual(generated.cell("area", cell).value, area, cell)
+        for cell in no_peak_cells:
+            self.assertEqual(generated.cell("area", cell).value, "N.D", cell)
 
 
 if __name__ == "__main__":

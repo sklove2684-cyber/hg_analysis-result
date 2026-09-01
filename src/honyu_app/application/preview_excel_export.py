@@ -80,7 +80,7 @@ class TemplateProfile:
     std_row_start: int
     recovery_row_start: dict[ConcentrationLevel, int]
     worker_row_start: int
-    worker_row_end: int
+    worker_row_end: int | None
     worker_column: str = "A"
     dibk_std_slots: tuple[str, ...] = ()
     dibk_recovery_slots: tuple[str, ...] = ()
@@ -277,7 +277,7 @@ IPA_AREA_PROFILE = TemplateProfile(
         ConcentrationLevel.HIGH: 34,
     },
     worker_row_start=20,
-    worker_row_end=46,
+    worker_row_end=None,
     worker_column="E",
     use_runtime_std_rt=True,
 )
@@ -767,13 +767,21 @@ class PreviewExcelExportService:
                 )
             )
             return result
-        worker_rows = self._worker_row_index(snapshot, profile)
-        target_analysis_numbers = set(worker_rows)
+        batch_analysis_numbers: set[str] = set()
         if batch.analysis_no_start <= batch.analysis_no_end:
-            target_analysis_numbers.update(
+            batch_analysis_numbers.update(
                 str(number)
                 for number in range(batch.analysis_no_start, batch.analysis_no_end + 1)
             )
+        worker_rows = self._worker_row_index(
+            snapshot,
+            profile,
+            allowed_analysis_numbers=(
+                batch_analysis_numbers if profile is IPA_AREA_PROFILE else None
+            ),
+        )
+        target_analysis_numbers = set(worker_rows)
+        target_analysis_numbers.update(batch_analysis_numbers)
         excluded_std_samples = self._select_legacy_std_set(
             batch.samples, method, profile, result
         )
@@ -1392,10 +1400,24 @@ class PreviewExcelExportService:
         return match.group(1) if match else None
 
     def _worker_row_index(
-        self, snapshot: ExcelTemplateSnapshot, profile: TemplateProfile
+        self,
+        snapshot: ExcelTemplateSnapshot,
+        profile: TemplateProfile,
+        allowed_analysis_numbers: set[str] | None = None,
     ) -> dict[str, list[int]]:
         index: dict[str, list[int]] = defaultdict(list)
-        for row in range(profile.worker_row_start, profile.worker_row_end + 1):
+        worker_row_end = profile.worker_row_end
+        if worker_row_end is None:
+            worker_row_end = max(
+                (
+                    int(match.group(1))
+                    for (sheet, address) in snapshot.cells
+                    if sheet == profile.area_sheet
+                    and (match := re.search(r"(\d+)$", address)) is not None
+                ),
+                default=profile.worker_row_start - 1,
+            )
+        for row in range(profile.worker_row_start, worker_row_end + 1):
             analysis_cell = snapshot.cell(
                 profile.area_sheet, f"{profile.worker_column}{row}"
             )
@@ -1405,7 +1427,9 @@ class PreviewExcelExportService:
             if analysis_cell.has_formula:
                 continue
             key = self._profile_worker_key(analysis_cell.value, profile)
-            if key is not None:
+            if key is not None and (
+                allowed_analysis_numbers is None or key in allowed_analysis_numbers
+            ):
                 index[key].append(row)
         return dict(index)
 

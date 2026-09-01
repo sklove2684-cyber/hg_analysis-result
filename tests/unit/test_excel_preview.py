@@ -629,6 +629,23 @@ class ExcelPreviewServiceTests(unittest.TestCase):
             )
         )
 
+    def test_area_ipa_worker_rows_extend_to_actual_used_range_and_skip_formulas(self) -> None:
+        template = ipa_area_snapshot(
+            TemplateCell("area", "E48", True, "262-196", "string"),
+            TemplateCell(
+                "area", "E90", True, "262-196", "formula", formula="=E48"
+            ),
+            TemplateCell("area", "E91", True, "262-999", "string"),
+        )
+
+        rows = self.service(template)._worker_row_index(
+            template,
+            IPA_AREA_PROFILE,
+            allowed_analysis_numbers={"196"},
+        )
+
+        self.assertEqual(rows, {"196": [48]})
+
     def test_area_sheet_without_ipa_headers_remains_legacy_mixture(self) -> None:
         result = self.service(snapshot()).preview_batch(
             batch([], "IPA"), Path("mixture-template.xlsx"), "A"

@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from copy import deepcopy
+import os
 import unittest
 
 from honyu_app.application.review_extraction import ReviewExtractionService
@@ -53,6 +54,28 @@ HONYU_120_167_PDF = next(
     ),
     Path(__file__).resolve().parents[3] / "TEST" / "혼유 120-167.pdf",
 )
+
+
+def _company_honyu_file(name: str) -> Path:
+    configured = os.environ.get("HONYU_120_167_TEST_DIR")
+    directories = (
+        Path(configured) if configured else None,
+        Path(r"\\172.30.1.100\data\분석결과(사업장별)★\양세경"),
+        Path(__file__).resolve().parents[3] / "TEST",
+    )
+    return next(
+        (
+            directory / name
+            for directory in directories
+            if directory is not None and (directory / name).is_file()
+        ),
+        Path(),
+    )
+
+
+COMPANY_HONYU_PDF = _company_honyu_file("혼유 120-167.pdf")
+COMPANY_HONYU_TEMPLATE = _company_honyu_file("(혼유) 120-167.xlsx")
+COMPANY_HONYU_RESULT = _company_honyu_file("(혼유) 120-167_결과.xlsx")
 
 
 @unittest.skipUnless(SAMPLE_PDF.is_file(), f"샘플 PDF 없음: {SAMPLE_PDF}")
@@ -145,7 +168,7 @@ class LabSolutionsSamplePdfRegressionTests(unittest.TestCase):
             self.assertEqual(len(database.search_batches(BatchSearchQuery())), 1)
 
     @unittest.skipUnless(SAMPLE_XLSX.is_file(), f"샘플 Excel 없음: {SAMPLE_XLSX}")
-    def test_sample_batch_preview_selects_only_dibk_area_top_two(self) -> None:
+    def test_sample_batch_preview_selects_dibk_by_recurrent_std_rt(self) -> None:
         batch = deepcopy(self.batch)
         with TemporaryDirectory() as temp:
             database = MockDatabaseService(Path(temp) / "mock.db")
@@ -156,16 +179,19 @@ class LabSolutionsSamplePdfRegressionTests(unittest.TestCase):
                 database, XlsxTemplateInspector()
             ).preview(saved.batch_id, SAMPLE_XLSX, StdMethod.A)
 
-        overflow = [
+        excluded_dibk = [
             row for row in preview.rows
-            if row.exclude_reason == ExcludeReason.DIBK_AREA_NOT_TOP2.value
+            if row.exclude_reason in {
+                ExcludeReason.DIBK_RT_NOT_CLOSEST.value,
+                ExcludeReason.DIBK_STD_RT_NO_MATCH.value,
+            }
         ]
         selected_by_sample: dict[str, list] = {}
         for row in preview.rows:
             if row.material == "DIBK" and row.status is ExcelPreviewStatus.MAPPED:
                 selected_by_sample.setdefault(row.sample_name, []).append(row)
         self.assertTrue(preview.can_generate)
-        self.assertGreater(len(overflow), 0)
+        self.assertGreater(len(excluded_dibk), 0)
         self.assertTrue(all(len(rows) <= 2 for rows in selected_by_sample.values()))
 
     @unittest.skipUnless(SAMPLE_XLSX.is_file(), f"샘플 Excel 없음: {SAMPLE_XLSX}")
@@ -270,6 +296,155 @@ class Honyu120167ContinuationRegressionTests(unittest.TestCase):
         )
         self.assertNotIn(40, {sample.page_no for sample in loaded.samples})
         self.assertNotIn(42, {sample.page_no for sample in loaded.samples})
+
+
+@unittest.skipUnless(
+    COMPANY_HONYU_PDF.is_file()
+    and COMPANY_HONYU_TEMPLATE.is_file()
+    and COMPANY_HONYU_RESULT.is_file(),
+    "회사 혼유 120-167 실제 PDF/Excel이 없습니다.",
+)
+class Honyu120167DibkRtRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.batch = LabSolutionsParser().parse(
+            COMPANY_HONYU_PDF,
+            analysis_type="혼유",
+            analysis_no_start=120,
+            analysis_no_end=167,
+        )
+
+    @staticmethod
+    def _preview(method: str):
+        database = type(
+            "NoCorrectionDatabase",
+            (),
+            {"list_peak_corrections": lambda self, _peak_id: []},
+        )()
+        return PreviewExcelExportService(
+            database, XlsxTemplateInspector()
+        ).preview_batch(
+            Honyu120167DibkRtRegressionTests.batch,
+            COMPANY_HONYU_RESULT,
+            method,
+        )
+
+    def test_actual_workers_use_only_closest_peaks_for_each_std_rt_slot(self) -> None:
+        expected = {
+            "120": [("AA37", 1286, "12.669")],
+            "123": [("AA38", 3445, "12.666")],
+            "124": [("AA39", 1575, "12.670")],
+            "125": [("AA40", 2869, "12.667")],
+            "126": [("Z41", 10700, "10.775"), ("AA41", 51387, "12.669")],
+        }
+        for method in ("A", "B"):
+            with self.subTest(method=method):
+                preview = self._preview(method)
+                self.assertTrue(preview.can_generate, preview.issues)
+                self.assertEqual(preview.error_count, 0)
+                for number, expected_rows in expected.items():
+                    rows = [
+                        row
+                        for row in preview.rows
+                        if row.sample_type is SampleType.NUMERIC
+                        and row.sample_name.startswith(number)
+                        and row.material == "DIBK"
+                    ]
+                    mapped = [
+                        (row.target_cell, row.applied_area, str(row.retention_time))
+                        for row in rows
+                        if row.status is ExcelPreviewStatus.MAPPED
+                    ]
+                    self.assertEqual(mapped, expected_rows, number)
+
+                sample_120 = [
+                    row
+                    for row in preview.rows
+                    if row.sample_type is SampleType.NUMERIC
+                    and row.sample_name.startswith("120")
+                    and row.material == "DIBK"
+                ]
+                area_3040 = next(row for row in sample_120 if row.applied_area == 3040)
+                self.assertEqual(area_3040.status, ExcelPreviewStatus.EXCLUDED)
+                self.assertEqual(
+                    area_3040.exclude_reason,
+                    ExcludeReason.DIBK_STD_RT_NO_MATCH.value,
+                )
+                self.assertFalse(
+                    any(
+                        row.status is ExcelPreviewStatus.MAPPED
+                        and row.target_cell == "Z37"
+                        for row in sample_120
+                    )
+                )
+
+    def test_actual_std_incidental_10_31_rt_never_becomes_a_slot(self) -> None:
+        for method, selected_final in (("A", "STD5"), ("B", "STD6")):
+            with self.subTest(method=method):
+                preview = self._preview(method)
+                mapped = [
+                    row
+                    for row in preview.rows
+                    if row.sample_name in {"STD1", "STD2", "STD3", "STD4", selected_final}
+                    and row.material == "DIBK"
+                    and row.status is ExcelPreviewStatus.MAPPED
+                ]
+                self.assertEqual(len(mapped), 10)
+                self.assertTrue(
+                    all(
+                        abs(float(row.retention_time) - 10.31) > 0.2
+                        for row in mapped
+                    )
+                )
+                incidental = [
+                    row
+                    for row in preview.rows
+                    if row.material == "DIBK"
+                    and row.sample_name in {"STD4", selected_final}
+                    and abs(float(row.retention_time) - 10.31) <= 0.02
+                ]
+                self.assertTrue(incidental)
+                self.assertTrue(
+                    all(
+                        row.exclude_reason == ExcludeReason.DIBK_STD_RT_NO_MATCH.value
+                        for row in incidental
+                    )
+                )
+
+    def test_actual_clean_template_preserves_unmatched_slot_and_sum_formula(self) -> None:
+        database = type(
+            "NoCorrectionDatabase",
+            (),
+            {"list_peak_corrections": lambda self, _peak_id: []},
+        )()
+        preview = PreviewExcelExportService(
+            database, XlsxTemplateInspector()
+        ).preview_batch(self.batch, COMPANY_HONYU_TEMPLATE, "A")
+        writes = [
+            ExcelCellWrite(row.target_sheet, row.target_cell, row.applied_area)
+            for row in preview.rows
+            if row.status is ExcelPreviewStatus.MAPPED
+        ]
+        self.assertNotIn(("area", "Z37"), {(write.sheet, write.address) for write in writes})
+        self.assertNotIn(("area", "R37"), {(write.sheet, write.address) for write in writes})
+
+        with TemporaryDirectory() as temporary:
+            output = Path(temporary) / "honyu-120-167-dibk-rt.xlsx"
+            XlsxXmlCellWriter().write_copy(COMPANY_HONYU_TEMPLATE, output, writes)
+            validation = XlsxWorkbookValidator().validate(
+                COMPANY_HONYU_TEMPLATE,
+                output,
+                writes,
+                after_excel_recalculation=False,
+            )
+            before = XlsxTemplateInspector().inspect(COMPANY_HONYU_TEMPLATE)
+            after = XlsxTemplateInspector().inspect(output)
+
+            self.assertTrue(validation.valid, validation.errors)
+            self.assertEqual(after.cell("area", "Z37").value, before.cell("area", "Z37").value)
+            self.assertEqual(after.cell("area", "AA37").value, 1286)
+            self.assertEqual(after.cell("area", "R37").formula, before.cell("area", "R37").formula)
+            self.assertTrue(after.cell("area", "R37").has_formula)
 
 
 @unittest.skipUnless(

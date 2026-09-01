@@ -64,6 +64,8 @@ LEGACY_RECOVERY_ROW_START = {
     ConcentrationLevel.MID: 40,
     ConcentrationLevel.HIGH: 43,
 }
+DIBK_STD_CLUSTER_TOLERANCE = Decimal("0.080")
+DIBK_SAMPLE_MATCH_TOLERANCE = Decimal("0.200")
 
 
 @dataclass(frozen=True)
@@ -775,6 +777,9 @@ class PreviewExcelExportService:
         runtime_target_retention_times = self._runtime_target_retention_times(
             batch.samples, excluded_std_samples, method, profile
         )
+        dibk_target_retention_times = self._dibk_target_retention_times(
+            batch.samples, excluded_std_samples, method, profile
+        )
         if profile.use_runtime_std_rt:
             missing_runtime_materials = [
                 material
@@ -822,6 +827,7 @@ class PreviewExcelExportService:
                 worker_rows,
                 target_analysis_numbers,
                 runtime_target_retention_times,
+                dibk_target_retention_times,
                 result,
                 stoddard_cs2_rt=stoddard_cs2_rt,
             )
@@ -949,6 +955,73 @@ class PreviewExcelExportService:
                     if len(peaks) == 1:
                         result[material] = peaks[0].retention_time
         return result
+
+    @classmethod
+    def _dibk_target_retention_times(
+        cls,
+        samples: list[Sample],
+        excluded_sample_ids: set[UUID],
+        method: StdMethod,
+        profile: TemplateProfile,
+    ) -> tuple[Decimal, ...]:
+        """Find recurrent DIBK RT groups in the selected calibration set.
+
+        A group must occur in at least three standards and in at least 60% of
+        the selected standards.  This rejects incidental labels that appear in
+        only the high-concentration standards while retaining both physical
+        DIBK slots.
+        """
+        slot_count = len(profile.dibk_std_slots)
+        if slot_count == 0:
+            return ()
+        selected_replicates = set(cls._std_replicates(profile, method))
+        standards = [
+            sample
+            for sample in samples
+            if sample.sample_type is SampleType.STD
+            and sample.sample_id not in excluded_sample_ids
+            and sample.replicate_no in selected_replicates
+        ]
+        if len(standards) < 3:
+            return ()
+        observations = sorted(
+            (
+                peak.retention_time,
+                sample.sample_id,
+            )
+            for sample in standards
+            for peak in sample.peaks
+            if peak.include_for_excel and peak.material_standard == "DIBK"
+        )
+        clusters: list[list[tuple[Decimal, UUID]]] = []
+        for observation in observations:
+            if (
+                not clusters
+                or observation[0] - clusters[-1][-1][0]
+                > DIBK_STD_CLUSTER_TOLERANCE
+            ):
+                clusters.append([])
+            clusters[-1].append(observation)
+        minimum_occurrences = max(3, (len(standards) * 3 + 4) // 5)
+        recurrent = [
+            cluster
+            for cluster in clusters
+            if len({sample_id for _rt, sample_id in cluster}) >= minimum_occurrences
+        ]
+        # A partial or ambiguous calibration must not shift the higher RT group
+        # into slot 1 or silently discard a third recurrent group.
+        if len(recurrent) != slot_count:
+            return ()
+        targets = sorted(cls._median_rt(cluster) for cluster in recurrent)
+        return tuple(targets)
+
+    @staticmethod
+    def _median_rt(cluster: list[tuple[Decimal, UUID]]) -> Decimal:
+        values = sorted(rt for rt, _sample_id in cluster)
+        middle = len(values) // 2
+        if len(values) % 2:
+            return values[middle]
+        return (values[middle - 1] + values[middle]) / 2
 
     @staticmethod
     def _template_profile(
@@ -1314,6 +1387,7 @@ class PreviewExcelExportService:
         worker_rows: dict[str, list[int]],
         target_analysis_numbers: set[str],
         runtime_target_retention_times: dict[str, Decimal],
+        dibk_target_retention_times: tuple[Decimal, ...],
         result: ExcelPreviewResult,
         *,
         stoddard_cs2_rt: Decimal | None = None,
@@ -1517,14 +1591,6 @@ class PreviewExcelExportService:
                     )
                 )
 
-        ranked = sorted(
-            dibk,
-            key=lambda peak: (
-                -self._applied_area(peak),
-                peak.peak_no,
-                peak.retention_time,
-            ),
-        )
         slots = self._dibk_slots(profile, sample)
         if dibk and len(slots) < 2:
             for peak in dibk:
@@ -1536,28 +1602,59 @@ class PreviewExcelExportService:
                     f"{profile.name} Excel 양식에는 DIBK 입력 열이 없습니다.",
                 )
             return
-        for rank, peak in enumerate(ranked, start=1):
-            if rank > 2:
-                result.rows.append(
-                    self._row_for_peak(
-                        sample,
-                        peak,
-                        dibk_area_rank=rank,
-                        status=ExcelPreviewStatus.EXCLUDED,
-                        exclude_reason=ExcludeReason.DIBK_AREA_NOT_TOP2.value,
-                        message="DIBK 적용 Area 상위 2개 밖의 피크",
-                    )
-                )
+        selected: dict[int, Peak] = {}
+        available = list(dibk)
+        for slot_index, target_rt in enumerate(dibk_target_retention_times, start=1):
+            ranked = sorted(
+                available,
+                key=lambda peak: (
+                    abs(peak.retention_time - target_rt),
+                    peak.peak_no,
+                    peak.retention_time,
+                ),
+            )
+            if not ranked:
                 continue
+            closest = ranked[0]
+            if abs(closest.retention_time - target_rt) > DIBK_SAMPLE_MATCH_TOLERANCE:
+                continue
+            selected[slot_index] = closest
+            available.remove(closest)
+
+        for slot_index, peak in selected.items():
             self._append_mapped_row(
                 result,
                 snapshot,
                 profile,
                 sample,
                 peak,
-                slots[rank - 1],
+                slots[slot_index - 1],
                 row,
-                dibk_area_rank=rank,
+                dibk_area_rank=slot_index,
+            )
+        for peak in dibk:
+            if peak in selected.values():
+                continue
+            within_any_slot = any(
+                abs(peak.retention_time - target_rt) <= DIBK_SAMPLE_MATCH_TOLERANCE
+                for target_rt in dibk_target_retention_times
+            )
+            result.rows.append(
+                self._row_for_peak(
+                    sample,
+                    peak,
+                    status=ExcelPreviewStatus.EXCLUDED,
+                    exclude_reason=(
+                        ExcludeReason.DIBK_RT_NOT_CLOSEST.value
+                        if within_any_slot
+                        else ExcludeReason.DIBK_STD_RT_NO_MATCH.value
+                    ),
+                    message=(
+                        "동일 DIBK STD RT 슬롯에서 가장 가까운 Peak가 아님"
+                        if within_any_slot
+                        else "선택된 STD DIBK RT 슬롯과 허용 거리 내에서 일치하지 않음"
+                    ),
+                )
             )
 
     def _sample_target_row(

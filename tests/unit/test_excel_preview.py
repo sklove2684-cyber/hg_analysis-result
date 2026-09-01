@@ -1155,21 +1155,65 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertIn("디에틸에테르", result.issues[0].message)
         self.assertIn("혼유", result.issues[0].message)
 
-    def test_dibk_uses_corrected_area_top_two_and_keeps_overflow_excluded(self) -> None:
-        values = [peak(1, 100, "DIBK"), peak(2, 300, "DIBK"), peak(3, 200, "DIBK")]
+    def test_dibk_uses_std_rt_slots_and_ignores_area_ranking(self) -> None:
+        def dibk_peak(number: int, rt: str, area: int) -> Peak:
+            return Peak(
+                number,
+                Decimal(rt),
+                area,
+                material_raw="DIBK",
+                material_standard="DIBK",
+            )
+
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[
+                    dibk_peak(1, f"10.80{repeat}", repeat * 100),
+                    dibk_peak(2, f"12.67{repeat}", repeat * 50),
+                ],
+            )
+            for repeat in range(1, 6)
+        ]
+        values = [
+            dibk_peak(1, "10.806", 100),
+            dibk_peak(2, "12.672", 50),
+            dibk_peak(3, "11.500", 50000),
+        ]
         correction = PeakCorrection(
-            uuid4(), values[0].peak_id, 100, 400, "재적분", datetime.now(timezone.utc), "PC", 1
+            uuid4(), values[0].peak_id, 100, 400, "재적분",
+            datetime.now(timezone.utc), "PC", 1,
         )
         self.database.corrections[values[0].peak_id] = [correction]
-        sample = Sample(1, "STD1", "STD1", SampleType.STD, replicate_no=1, peaks=values)
+        worker = Sample(
+            20, "39", "39", SampleType.NUMERIC,
+            worker_match_key="39", peaks=values,
+        )
+        source = batch([*standards, worker])
+        source.analysis_no_start = 39
+        source.analysis_no_end = 39
+        template = snapshot(TemplateCell("area", "A37", True, "262-39", "string"))
 
-        result = self.service().preview_batch(batch([sample]), Path("template.xlsx"), "A")
-        mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
-        excluded = [row for row in result.rows if row.status is ExcelPreviewStatus.EXCLUDED]
+        result = self.service(template).preview_batch(
+            source, Path("template.xlsx"), "A"
+        )
+        worker_rows = [row for row in result.rows if row.sample_name == "39"]
+        mapped = [row for row in worker_rows if row.status is ExcelPreviewStatus.MAPPED]
+        excluded = [row for row in worker_rows if row.status is ExcelPreviewStatus.EXCLUDED]
 
-        self.assertEqual([(row.peak_no, row.applied_area, row.target_cell) for row in mapped], [(1, 400, "Z15"), (2, 300, "AA15")])
+        self.assertEqual(
+            [(row.peak_no, row.applied_area, row.target_cell) for row in mapped],
+            [(1, 400, "Z37"), (2, 50, "AA37")],
+        )
         self.assertEqual(excluded[0].peak_no, 3)
-        self.assertEqual(excluded[0].exclude_reason, ExcludeReason.DIBK_AREA_NOT_TOP2.value)
+        self.assertEqual(
+            excluded[0].exclude_reason,
+            ExcludeReason.DIBK_STD_RT_NO_MATCH.value,
+        )
         self.assertTrue(result.can_generate)
 
     def test_recovery_level_and_replicate_map_to_confirmed_cell(self) -> None:
@@ -2025,12 +2069,60 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertEqual(len(residual_tce), 7)
         self.assertTrue(all(row.exclude_reason == ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value for row in residual_tce))
 
-    def test_dibk_equal_area_uses_peak_number_as_tie_breaker(self) -> None:
-        values = [peak(3, 100, "DIBK"), peak(1, 100, "DIBK"), peak(2, 100, "DIBK")]
-        std = Sample(1, "STD1", "STD1", SampleType.STD, replicate_no=1, peaks=values)
-        result = self.service().preview_batch(batch([std]), Path("template.xlsx"), "A")
-        mapped = [row for row in result.rows if row.status is ExcelPreviewStatus.MAPPED]
-        self.assertEqual([(row.peak_no, row.target_cell) for row in mapped], [(1, "Z15"), (2, "AA15")])
+    def test_dibk_equal_rt_distance_uses_peak_number_as_tie_breaker(self) -> None:
+        def dibk_peak(number: int, rt: str, area: int = 100) -> Peak:
+            return Peak(
+                number,
+                Decimal(rt),
+                area,
+                material_raw="DIBK",
+                material_standard="DIBK",
+            )
+
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[dibk_peak(1, "10.800"), dibk_peak(2, "12.670")],
+            )
+            for repeat in range(1, 6)
+        ]
+        worker = Sample(
+            20,
+            "39",
+            "39",
+            SampleType.NUMERIC,
+            worker_match_key="39",
+            peaks=[
+                dibk_peak(3, "10.790"),
+                dibk_peak(1, "10.810"),
+                dibk_peak(2, "12.670"),
+            ],
+        )
+        source = batch([*standards, worker])
+        source.analysis_no_start = 39
+        source.analysis_no_end = 39
+        template = snapshot(TemplateCell("area", "A37", True, "262-39", "string"))
+
+        result = self.service(template).preview_batch(
+            source, Path("template.xlsx"), "A"
+        )
+        rows = [row for row in result.rows if row.sample_name == "39"]
+        mapped = [row for row in rows if row.status is ExcelPreviewStatus.MAPPED]
+        excluded = [row for row in rows if row.status is ExcelPreviewStatus.EXCLUDED]
+
+        self.assertEqual(
+            [(row.peak_no, row.target_cell) for row in mapped],
+            [(1, "Z37"), (2, "AA37")],
+        )
+        self.assertEqual(excluded[0].peak_no, 3)
+        self.assertEqual(
+            excluded[0].exclude_reason,
+            ExcludeReason.DIBK_RT_NOT_CLOSEST.value,
+        )
 
 
 class XlsxTemplateInspectorTests(unittest.TestCase):

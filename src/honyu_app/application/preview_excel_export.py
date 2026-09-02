@@ -417,6 +417,7 @@ ISOAMYL_N_PROPYL_ACETATE_PROFILE = TemplateProfile(
     },
     worker_row_start=20,
     worker_row_end=100,
+    use_runtime_std_rt=True,
 )
 
 CELLOSOLVE_PROFILE = TemplateProfile(

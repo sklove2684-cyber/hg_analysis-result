@@ -129,8 +129,26 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
         self.assertEqual(
             [(item.canonical_name, item.aliases) for item in materials],
             [
-                ("n-프로필 아세테이트", ("초산프로필",)),
-                ("이소아밀 아세테이트", ("초산이소아밀",)),
+                (
+                    "n-프로필 아세테이트",
+                    (
+                        "프로필아세테이트",
+                        "n-프로필아세테이트",
+                        "n-프로필 아세테이트",
+                        "초산프로필",
+                        "propyl acetate",
+                        "n-propyl acetate",
+                    ),
+                ),
+                (
+                    "이소아밀 아세테이트",
+                    (
+                        "이소아밀아세테이트",
+                        "이소아밀 아세테이트",
+                        "초산이소아밀",
+                        "isoamyl acetate",
+                    ),
+                ),
             ],
         )
 

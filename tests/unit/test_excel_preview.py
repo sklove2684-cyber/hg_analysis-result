@@ -1945,6 +1945,75 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertEqual([row.target_cell for row in mapped[10:12]], ["B28", "C28"])
         self.assertEqual([row.target_cell for row in mapped[12:]], ["F20", "I20"])
 
+    def test_isoamyl_n_propyl_acetate_uses_selected_std_rt_not_larger_area(self) -> None:
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[
+                    Peak(
+                        1, Decimal(f"4.81{repeat}"), repeat * 100,
+                        material_standard="n-프로필 아세테이트",
+                    ),
+                    Peak(
+                        2, Decimal(f"7.26{repeat}"), repeat * 90,
+                        material_standard="이소아밀 아세테이트",
+                    ),
+                ],
+            )
+            for repeat in range(1, 7)
+        ]
+        worker = Sample(
+            20,
+            "611",
+            "611",
+            SampleType.NUMERIC,
+            worker_match_key="611",
+            peaks=[
+                Peak(1, Decimal("4.812"), 10, material_standard="n-프로필 아세테이트"),
+                Peak(2, Decimal("4.900"), 9999, material_standard="n-프로필 아세테이트"),
+                Peak(3, Decimal("7.267"), 20, material_standard="이소아밀 아세테이트"),
+                Peak(4, Decimal("7.360"), 8888, material_standard="이소아밀 아세테이트"),
+            ],
+        )
+        source = batch([*standards, worker])
+        source.analysis_type = ISOAMYL_N_PROPYL_ACETATE_PROFILE.name
+        source.analysis_no_start = 611
+        source.analysis_no_end = 611
+
+        result = self.service(acetate_snapshot()).preview_batch(
+            source, Path("acetate-template.xlsx"), "A"
+        )
+        worker_rows = [
+            row for row in result.rows
+            if row.sample_name == "611"
+        ]
+
+        self.assertTrue(result.can_generate, result.issues)
+        self.assertTrue(ISOAMYL_N_PROPYL_ACETATE_PROFILE.use_runtime_std_rt)
+        self.assertEqual(
+            {
+                row.material: row.applied_area
+                for row in worker_rows
+                if row.status is ExcelPreviewStatus.MAPPED
+            },
+            {"n-프로필 아세테이트": 10, "이소아밀 아세테이트": 20},
+        )
+        self.assertEqual(
+            {
+                row.applied_area: row.exclude_reason
+                for row in worker_rows
+                if row.status is ExcelPreviewStatus.EXCLUDED
+            },
+            {
+                9999: ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value,
+                8888: ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value,
+            },
+        )
+
     def test_cellosolve_profile_uses_confirmed_cells_and_excludes_std6(self) -> None:
         materials = (
             "2-Butoxyethanol",

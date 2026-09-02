@@ -116,8 +116,22 @@ G2_MATERIALS = (
     _material("클로로벤젠", "클로로벤젠"),
 )
 ISOAMYL_N_PROPYL_ACETATE_MATERIALS = (
-    _material("n-프로필 아세테이트", "초산프로필"),
-    _material("이소아밀 아세테이트", "초산이소아밀"),
+    _material(
+        "n-프로필 아세테이트",
+        "프로필아세테이트",
+        "n-프로필아세테이트",
+        "n-프로필 아세테이트",
+        "초산프로필",
+        "propyl acetate",
+        "n-propyl acetate",
+    ),
+    _material(
+        "이소아밀 아세테이트",
+        "이소아밀아세테이트",
+        "이소아밀 아세테이트",
+        "초산이소아밀",
+        "isoamyl acetate",
+    ),
 )
 CELLOSOLVE_MATERIALS = (
     _material("2-Butoxyethanol", "부톡시에탄올(BC)", "2-부톡시에탄올", "BC"),

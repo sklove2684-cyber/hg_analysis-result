@@ -386,6 +386,7 @@ def infer_analysis_type(
     materials: tuple[str, ...] = (),
 ) -> str | None:
     filename_evidence = filename.casefold()
+    compact_filename = re.sub(r"[^0-9a-z가-힣]+", "", filename_evidence)
     auxiliary_evidence = " ".join((*method_filenames, *materials)).casefold()
     # Specific names precede broad families. Short or ambiguous names are not guessed.
     rules: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -422,6 +423,10 @@ def infer_analysis_type(
     # A clear source filename identifies the job. Method names and detected
     # materials are only fallback evidence; co-detected solvents/internal
     # standards must never override the filename-selected analysis type.
+    if "혼유" in compact_filename and "g2" in compact_filename:
+        return "(혼유-G2) THF,CFM,벤젠,클로로벤젠"
+    if "혼유" in compact_filename and "g3" in compact_filename:
+        return "(혼유-G3) 1,2-디클로로에틸렌,퍼클로로에틸렌,프로판,에탄"
     if "iba" in filename_evidence and any(
         token in filename_evidence for token in ("1-btoh", "n-btoh")
     ):

@@ -479,6 +479,26 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
         registration._thread = None
         registration.deleteLater()
 
+    def test_g3_parenthesized_filename_does_not_block_selected_g3_extraction(self) -> None:
+        registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
+        pdf = Path(self.temp.name) / "혼유(G3-1,2디클로로에탄) 152-153@완료.pdf"
+        pdf.touch()
+        selected = "(혼유-G3) 1,2-디클로로에틸렌,퍼클로로에틸렌,프로판,에탄"
+        registration.pdf_path.setText(str(pdf))
+        registration.analysis_type.setCurrentText(selected)
+        registration.start_no.setValue(152)
+        registration.end_no.setValue(153)
+
+        with patch.object(QThread, "start") as start:
+            registration.start_extraction()
+
+        start.assert_called_once_with()
+        self.assertIsNotNone(registration._thread)
+        self.assertNotIn("PDF 파일명은 혼유로 판별", registration.extraction_status.text())
+        registration._worker = None
+        registration._thread = None
+        registration.deleteLater()
+
     def test_unknown_filename_allows_manually_selected_analysis_type(self) -> None:
         registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
         pdf = Path(self.temp.name) / "sample 516-534.pdf"

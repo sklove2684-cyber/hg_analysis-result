@@ -331,6 +331,36 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
                     infer_analysis_type(filename, materials=materials), expected
                 )
 
+    def test_g2_g3_filename_markers_ignore_separators_and_override_internal_evidence(self) -> None:
+        g2 = "(혼유-G2) THF,CFM,벤젠,클로로벤젠"
+        g3 = "(혼유-G3) 1,2-디클로로에틸렌,퍼클로로에틸렌,프로판,에탄"
+        cases = {
+            "혼유-G2 결과.pdf": g2,
+            "혼유(G2 결과).pdf": g2,
+            "혼유(G2-THF).pdf": g2,
+            "G2 혼유 결과.pdf": g2,
+            "G2-혼유 결과.pdf": g2,
+            "혼유 G2 결과.pdf": g2,
+            "혼유-G3 결과.pdf": g3,
+            "혼유(G3 결과).pdf": g3,
+            "혼유(G3-결과).pdf": g3,
+            "G3 혼유 결과.pdf": g3,
+            "G3-혼유 결과.pdf": g3,
+            "혼유 G3 결과.pdf": g3,
+            "혼유(G3-1,2디클로로에탄) 152-153@완료.pdf": g3,
+        }
+        for filename, expected in cases.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(
+                    infer_analysis_type(
+                        filename,
+                        method_filenames=("일반 혼유.gcm",),
+                        materials=("n-hexane", "DIBK"),
+                    ),
+                    expected,
+                )
+        self.assertEqual(infer_analysis_type("혼유 120-167.pdf"), "혼유")
+
     def test_internal_evidence_is_used_only_when_filename_is_unknown(self) -> None:
         self.assertEqual(
             infer_analysis_type(

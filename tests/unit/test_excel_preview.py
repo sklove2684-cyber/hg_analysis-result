@@ -1230,9 +1230,86 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         self.assertEqual(excluded[0].peak_no, 3)
         self.assertEqual(
             excluded[0].exclude_reason,
-            ExcludeReason.DIBK_STD_RT_NO_MATCH.value,
+            ExcludeReason.DIBK_RT_NOT_CLOSEST.value,
         )
         self.assertTrue(result.can_generate)
+
+    def test_dibk_assigns_every_peak_to_nearest_slot_without_fixed_tolerance(self) -> None:
+        def dibk_peak(number: int, rt: str, area: int) -> Peak:
+            return Peak(
+                number,
+                Decimal(rt),
+                area,
+                material_raw="DIBK",
+                material_standard="DIBK",
+            )
+
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[dibk_peak(1, "10.800", 100), dibk_peak(2, "12.670", 50)],
+            )
+            for repeat in range(1, 6)
+        ]
+        cases = {
+            172: [dibk_peak(1, "12.185", 1287)],
+            174: [dibk_peak(1, "12.185", 3813)],
+            196: [
+                dibk_peak(1, "10.425", 2470),
+                dibk_peak(2, "12.124", 3082),
+                dibk_peak(3, "12.188", 9718),
+                dibk_peak(4, "12.667", 4046),
+            ],
+            202: [dibk_peak(1, "12.188", 1052)],
+            209: [dibk_peak(1, "12.190", 1347)],
+        }
+        workers = [
+            Sample(
+                number,
+                str(number),
+                str(number),
+                SampleType.NUMERIC,
+                worker_match_key=str(number),
+                peaks=peaks,
+            )
+            for number, peaks in cases.items()
+        ]
+        source = batch([*standards, *workers])
+        source.analysis_no_start = 168
+        source.analysis_no_end = 213
+        template = snapshot(
+            *(
+                TemplateCell("area", f"A{row}", True, f"262-{number}", "string")
+                for row, number in enumerate(range(168, 214), start=37)
+            )
+        )
+
+        result = self.service(template).preview_batch(
+            source, Path("template.xlsx"), "A"
+        )
+        mapped = {
+            (row.sample_name, row.target_cell): row.applied_area
+            for row in result.rows
+            if row.sample_type is SampleType.NUMERIC
+            and row.material == "DIBK"
+            and row.status is ExcelPreviewStatus.MAPPED
+        }
+
+        self.assertEqual(
+            mapped,
+            {
+                ("172", "AA41"): 1287,
+                ("174", "AA43"): 3813,
+                ("196", "Z65"): 2470,
+                ("196", "AA65"): 4046,
+                ("202", "AA71"): 1052,
+                ("209", "AA78"): 1347,
+            },
+        )
 
     def test_legacy_material_uses_selected_std_rt_instead_of_largest_area(self) -> None:
         def material_peak(number: int, rt: str, area: int) -> Peak:

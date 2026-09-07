@@ -65,7 +65,6 @@ LEGACY_RECOVERY_ROW_START = {
     ConcentrationLevel.HIGH: 43,
 }
 DIBK_STD_CLUSTER_TOLERANCE = Decimal("0.080")
-DIBK_SAMPLE_MATCH_TOLERANCE = Decimal("0.200")
 
 
 @dataclass(frozen=True)
@@ -1677,24 +1676,40 @@ class PreviewExcelExportService:
                     f"{profile.name} Excel 양식에는 DIBK 입력 열이 없습니다.",
                 )
             return
+        if dibk and len(dibk_target_retention_times) != len(slots):
+            for peak in dibk:
+                result.rows.append(
+                    self._row_for_peak(
+                        sample,
+                        peak,
+                        status=ExcelPreviewStatus.EXCLUDED,
+                        exclude_reason=ExcludeReason.DIBK_STD_RT_NO_MATCH.value,
+                        message="선택된 STD에서 DIBK RT 슬롯을 확정할 수 없음",
+                    )
+                )
+            return
+        candidates_by_slot: dict[int, list[Peak]] = defaultdict(list)
+        for peak in dibk:
+            slot_index, _target_rt = min(
+                enumerate(dibk_target_retention_times, start=1),
+                key=lambda item: (
+                    abs(peak.retention_time - item[1]),
+                    item[0],
+                ),
+            )
+            candidates_by_slot[slot_index].append(peak)
+
         selected: dict[int, Peak] = {}
-        available = list(dibk)
-        for slot_index, target_rt in enumerate(dibk_target_retention_times, start=1):
-            ranked = sorted(
-                available,
+        for slot_index, candidates in candidates_by_slot.items():
+            target_rt = dibk_target_retention_times[slot_index - 1]
+            selected[slot_index] = min(
+                candidates,
                 key=lambda peak: (
                     abs(peak.retention_time - target_rt),
                     peak.peak_no,
                     peak.retention_time,
                 ),
             )
-            if not ranked:
-                continue
-            closest = ranked[0]
-            if abs(closest.retention_time - target_rt) > DIBK_SAMPLE_MATCH_TOLERANCE:
-                continue
-            selected[slot_index] = closest
-            available.remove(closest)
 
         for slot_index, peak in selected.items():
             self._append_mapped_row(
@@ -1710,25 +1725,13 @@ class PreviewExcelExportService:
         for peak in dibk:
             if peak in selected.values():
                 continue
-            within_any_slot = any(
-                abs(peak.retention_time - target_rt) <= DIBK_SAMPLE_MATCH_TOLERANCE
-                for target_rt in dibk_target_retention_times
-            )
             result.rows.append(
                 self._row_for_peak(
                     sample,
                     peak,
                     status=ExcelPreviewStatus.EXCLUDED,
-                    exclude_reason=(
-                        ExcludeReason.DIBK_RT_NOT_CLOSEST.value
-                        if within_any_slot
-                        else ExcludeReason.DIBK_STD_RT_NO_MATCH.value
-                    ),
-                    message=(
-                        "동일 DIBK STD RT 슬롯에서 가장 가까운 Peak가 아님"
-                        if within_any_slot
-                        else "선택된 STD DIBK RT 슬롯과 허용 거리 내에서 일치하지 않음"
-                    ),
+                    exclude_reason=ExcludeReason.DIBK_RT_NOT_CLOSEST.value,
+                    message="동일 DIBK STD RT 슬롯에서 가장 가까운 Peak가 아님",
                 )
             )
 

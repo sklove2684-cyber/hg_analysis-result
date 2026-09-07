@@ -91,6 +91,30 @@ COMPANY_HONYU_TEMPLATE = _company_honyu_file("(혼유) 120-167.xlsx")
 COMPANY_HONYU_RESULT = _company_honyu_file("(혼유) 120-167_결과.xlsx")
 
 
+def _company_honyu_168_213_file(name: str) -> Path:
+    configured = os.environ.get("HONYU_168_213_TEST_DIR")
+    directories = (
+        Path(configured) if configured else None,
+        Path(r"\\172.30.1.100\data\분석결과(사업장별)★\양세경\09.07"),
+    )
+    return next(
+        (
+            directory / name
+            for directory in directories
+            if directory is not None and (directory / name).is_file()
+        ),
+        Path(),
+    )
+
+
+COMPANY_HONYU_168_213_PDF = _company_honyu_168_213_file(
+    "혼유 168-213/혼유 168-213.pdf"
+)
+COMPANY_HONYU_168_213_TEMPLATE = _company_honyu_168_213_file(
+    "(혼유) 168-213.xlsx"
+)
+
+
 @unittest.skipUnless(SAMPLE_PDF.is_file(), f"샘플 PDF 없음: {SAMPLE_PDF}")
 class LabSolutionsSamplePdfRegressionTests(unittest.TestCase):
     @classmethod
@@ -345,8 +369,8 @@ class Honyu120167DibkRtRegressionTests(unittest.TestCase):
     def test_actual_workers_use_only_closest_peaks_for_each_std_rt_slot(self) -> None:
         expected = {
             "120": [("AA37", 1286, "12.669")],
-            "123": [("AA38", 3445, "12.666")],
-            "124": [("AA39", 1575, "12.670")],
+            "123": [("Z38", 1805, "10.458"), ("AA38", 3445, "12.666")],
+            "124": [("Z39", 1364, "10.459"), ("AA39", 1575, "12.670")],
             "125": [("AA40", 2869, "12.667")],
             "126": [("Z41", 10700, "10.775"), ("AA41", 51387, "12.669")],
         }
@@ -381,7 +405,7 @@ class Honyu120167DibkRtRegressionTests(unittest.TestCase):
                 self.assertEqual(area_3040.status, ExcelPreviewStatus.EXCLUDED)
                 self.assertEqual(
                     area_3040.exclude_reason,
-                    ExcludeReason.DIBK_STD_RT_NO_MATCH.value,
+                    ExcludeReason.DIBK_RT_NOT_CLOSEST.value,
                 )
                 self.assertFalse(
                     any(
@@ -570,7 +594,7 @@ class Honyu120167DibkRtRegressionTests(unittest.TestCase):
                 self.assertTrue(incidental)
                 self.assertTrue(
                     all(
-                        row.exclude_reason == ExcludeReason.DIBK_STD_RT_NO_MATCH.value
+                        row.exclude_reason == ExcludeReason.DIBK_RT_NOT_CLOSEST.value
                         for row in incidental
                     )
                 )
@@ -609,6 +633,149 @@ class Honyu120167DibkRtRegressionTests(unittest.TestCase):
             self.assertEqual(after.cell("area", "AA37").value, 1286)
             self.assertEqual(after.cell("area", "R37").formula, before.cell("area", "R37").formula)
             self.assertTrue(after.cell("area", "R37").has_formula)
+
+
+@unittest.skipUnless(
+    COMPANY_HONYU_168_213_PDF.is_file()
+    and COMPANY_HONYU_168_213_TEMPLATE.is_file(),
+    "회사 혼유 168-213 실제 PDF/Excel이 없습니다.",
+)
+class Honyu168213DibkRtRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.batch = LabSolutionsParser().parse(
+            COMPANY_HONYU_168_213_PDF,
+            analysis_type="혼유",
+            analysis_no_start=168,
+            analysis_no_end=213,
+        )
+        database = type(
+            "NoCorrectionDatabase",
+            (),
+            {"list_peak_corrections": lambda self, _peak_id: []},
+        )()
+        cls.preview = PreviewExcelExportService(
+            database, XlsxTemplateInspector()
+        ).preview_batch(
+            cls.batch,
+            COMPANY_HONYU_168_213_TEMPLATE,
+            "A",
+        )
+
+    def test_all_actual_worker_dibk_peaks_use_nearest_std_slot(self) -> None:
+        self.assertTrue(self.preview.can_generate, self.preview.issues)
+        self.assertEqual(self.preview.error_count, 0)
+        target_rts = PreviewExcelExportService._dibk_target_retention_times(
+            self.batch.samples,
+            set(),
+            StdMethod.A,
+            LEGACY_PROFILE,
+        )
+        self.assertEqual(len(target_rts), 2)
+
+        checked = 0
+        for sample in self.batch.samples:
+            if sample.sample_type is not SampleType.NUMERIC:
+                continue
+            candidates = [
+                peak
+                for peak in sample.peaks
+                if peak.include_for_excel and peak.material_standard == "DIBK"
+            ]
+            if not candidates:
+                continue
+            checked += 1
+            expected = {}
+            for peak in candidates:
+                slot_index = min(
+                    range(2),
+                    key=lambda index: (
+                        abs(peak.retention_time - target_rts[index]),
+                        index,
+                    ),
+                )
+                current = expected.get(slot_index)
+                if current is None or (
+                    abs(peak.retention_time - target_rts[slot_index]),
+                    peak.peak_no,
+                    peak.retention_time,
+                ) < (
+                    abs(current.retention_time - target_rts[slot_index]),
+                    current.peak_no,
+                    current.retention_time,
+                ):
+                    expected[slot_index] = peak
+
+            rows = [
+                row
+                for row in self.preview.rows
+                if row.sample_type is SampleType.NUMERIC
+                and row.sample_name == sample.sample_name_raw
+                and row.material == "DIBK"
+            ]
+            mapped = {
+                0 if row.target_cell.startswith("Z") else 1: (
+                    row.peak_no,
+                    row.applied_area,
+                )
+                for row in rows
+                if row.status is ExcelPreviewStatus.MAPPED
+            }
+            self.assertEqual(
+                mapped,
+                {
+                    slot_index: (peak.peak_no, peak.area_raw)
+                    for slot_index, peak in expected.items()
+                },
+                sample.sample_name_raw,
+            )
+        self.assertGreater(checked, 0)
+
+    def test_confirmed_missing_dibk_values_and_formula_cells(self) -> None:
+        expected = {
+            ("172", "AA41"): 1287,
+            ("174", "AA43"): 3813,
+            ("196", "Z65"): 2470,
+            ("196", "AA65"): 4046,
+            ("202", "AA71"): 1052,
+            ("209", "AA78"): 1347,
+        }
+        mapped = [
+            row
+            for row in self.preview.rows
+            if row.sample_type is SampleType.NUMERIC
+            and row.material == "DIBK"
+            and row.status is ExcelPreviewStatus.MAPPED
+        ]
+        for (number, cell), area in expected.items():
+            matches = [
+                row
+                for row in mapped
+                if row.sample_name.startswith(number) and row.target_cell == cell
+            ]
+            self.assertEqual(len(matches), 1, (number, cell))
+            self.assertEqual(matches[0].applied_area, area, (number, cell))
+
+        writes = [
+            ExcelCellWrite(row.target_sheet, row.target_cell, row.applied_area)
+            for row in self.preview.rows
+            if row.status is ExcelPreviewStatus.MAPPED
+        ]
+        with TemporaryDirectory() as temporary:
+            output = Path(temporary) / "honyu-168-213-dibk-rt.xlsx"
+            XlsxXmlCellWriter().write_copy(
+                COMPANY_HONYU_168_213_TEMPLATE, output, writes
+            )
+            before = XlsxTemplateInspector().inspect(COMPANY_HONYU_168_213_TEMPLATE)
+            after = XlsxTemplateInspector().inspect(output)
+            for (_sample, cell), area in expected.items():
+                self.assertEqual(after.cell("area", cell).value, area, cell)
+            for row in (41, 43, 65, 71, 78):
+                self.assertEqual(
+                    after.cell("area", f"R{row}").formula,
+                    before.cell("area", f"R{row}").formula,
+                )
+                self.assertTrue(after.cell("area", f"R{row}").has_formula)
 
 
 @unittest.skipUnless(

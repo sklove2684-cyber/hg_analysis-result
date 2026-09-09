@@ -7,6 +7,7 @@ from uuid import uuid4
 from honyu_app.application.preview_excel_export import (
     ACN_PROFILE,
     ACETIC_ACID_PROFILE,
+    ALCOHOL_PROFILE,
     BC_PROFILE,
     CELLOSOLVE_PROFILE,
     DIETHYL_ETHER_PROFILE,
@@ -1632,6 +1633,114 @@ class ExcelPreviewServiceTests(unittest.TestCase):
              if row.status is ExcelPreviewStatus.MAPPED],
             [("IAA", "M5")],
         )
+
+    def test_alcohol_2_uses_selected_std_median_rt_for_worker_peaks(self) -> None:
+        def alcohol_peak(number: int, material: str, rt: str, area: int) -> Peak:
+            return Peak(
+                number,
+                Decimal(rt),
+                area,
+                material_raw=material,
+                material_standard=material,
+            )
+
+        standard_rts = {
+            1: ("3.384", "3.851"),
+            2: ("3.384", "3.852"),
+            3: ("3.384", "3.852"),
+            4: ("3.385", "3.853"),
+            5: ("3.387", "3.856"),
+            6: ("3.390", "3.859"),
+        }
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[
+                    alcohol_peak(1, "IBA", iba_rt, repeat * 100),
+                    alcohol_peak(2, "n-BTOH", btoh_rt, repeat * 200),
+                ],
+            )
+            for repeat, (iba_rt, btoh_rt) in standard_rts.items()
+        ]
+        workers = [
+            Sample(
+                20,
+                "198-",
+                "198-",
+                SampleType.NUMERIC,
+                worker_match_key="198",
+                peaks=[alcohol_peak(1, "n-BTOH", "3.957", 1087)],
+            ),
+            Sample(
+                21,
+                "200",
+                "200",
+                SampleType.NUMERIC,
+                worker_match_key="200",
+                peaks=[
+                    alcohol_peak(1, "IBA", "3.337", 2593),
+                    alcohol_peak(2, "n-BTOH", "3.821", 2095),
+                    alcohol_peak(3, "n-BTOH", "3.894", 1691),
+                    alcohol_peak(4, "n-BTOH", "3.956", 3779),
+                ],
+            ),
+        ]
+        source = batch([*standards, *workers], "(알콜2) IBA,1-BTOH")
+        source.analysis_no_start = 168
+        source.analysis_no_end = 213
+        template = one_column_snapshot(
+            TemplateCell("area입력", "F3", True, "IBA", "string"),
+            TemplateCell("area입력", "I3", True, "1-BTOH", "string"),
+            TemplateCell("area입력", "L3", True, "IAA", "string"),
+            TemplateCell("area입력", "O3", True, "2-BTOH", "string"),
+            *(
+                TemplateCell(
+                    "area입력", f"A{row}", True, f"262-{number}", "string"
+                )
+                for row, number in enumerate(range(168, 214), start=21)
+            ),
+        )
+
+        self.assertTrue(ALCOHOL_PROFILE.use_runtime_std_rt)
+        for method in (StdMethod.A, StdMethod.B):
+            with self.subTest(method=method):
+                targets = PreviewExcelExportService._runtime_target_retention_times(
+                    source.samples, set(), method, ALCOHOL_PROFILE
+                )
+                self.assertEqual(
+                    targets,
+                    {"IBA": Decimal("3.384"), "n-BTOH": Decimal("3.852")},
+                )
+                result = self.service(template).preview_batch(
+                    source, Path("alcohol-2-template.xlsx"), method
+                )
+                mapped = {
+                    (row.sample_name, row.target_cell): row.applied_area
+                    for row in result.rows
+                    if row.sample_type is SampleType.NUMERIC
+                    and row.status is ExcelPreviewStatus.MAPPED
+                }
+                self.assertEqual(
+                    mapped,
+                    {
+                        ("198-", "I51"): 1087,
+                        ("200", "F53"): 2593,
+                        ("200", "I53"): 2095,
+                    },
+                )
+                rejected = next(
+                    row
+                    for row in result.rows
+                    if row.sample_name == "200" and row.applied_area == 1691
+                )
+                self.assertEqual(
+                    rejected.exclude_reason,
+                    ExcludeReason.MATERIAL_RT_NOT_CLOSEST.value,
+                )
 
     def test_stoddard_residual_sums_all_non_solvent_peaks(self) -> None:
         template = ExcelTemplateSnapshot(

@@ -9,7 +9,16 @@ from honyu_app.domain.enums import ExcludeReason, SampleType
 
 class SampleNumberMatchingTests(unittest.TestCase):
     def test_actual_analysis_sample_names(self) -> None:
-        for raw, expected in (("84", "84"), ("85-업체명", "85"), ("119", "119")):
+        for raw, expected in (
+            ("84", "84"),
+            ("85-업체명", "85"),
+            ("119", "119"),
+            ("168", "168"),
+            ("168-", "168"),
+            ("168-경일모터스", "168"),
+            ("201-", "201"),
+            ("210-", "210"),
+        ):
             with self.subTest(raw=raw):
                 decision = classify_sample_number(raw, SampleType.NUMERIC)
                 self.assertEqual(decision.analysis_number, expected)
@@ -21,6 +30,7 @@ class SampleNumberMatchingTests(unittest.TestCase):
             ("B-control", SampleType.UNKNOWN, ExcludeReason.QC_SAMPLE.value),
             ("0728bGCD-1", SampleType.NUMERIC, ExcludeReason.QC_SAMPLE.value),
             ("0803bGCGG-1", SampleType.NUMERIC, ExcludeReason.QC_SAMPLE.value),
+            ("168B", SampleType.NUMERIC, ExcludeReason.NON_ANALYSIS_SAMPLE.value),
             ("관리시료", SampleType.UNKNOWN, ExcludeReason.NON_ANALYSIS_SAMPLE.value),
         )
         for raw, sample_type, expected_reason in cases:

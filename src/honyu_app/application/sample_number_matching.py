@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from honyu_app.domain.enums import ExcludeReason, SampleType
 
 
-_ANALYSIS_SAMPLE = re.compile(r"^(?P<number>\d+)(?:-(?P<suffix>.+))?$")
+_ANALYSIS_SAMPLE = re.compile(r"^(?P<number>\d+)(?:-(?P<suffix>.*))?$")
 _DATE_QC_SAMPLE = re.compile(r"^\d{4}b[\w-]+$", re.IGNORECASE)
 
 

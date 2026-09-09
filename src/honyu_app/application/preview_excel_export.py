@@ -165,6 +165,7 @@ ALCOHOL_PROFILE = TemplateProfile(
     },
     worker_row_start=21,
     worker_row_end=287,
+    use_runtime_std_rt=True,
 )
 
 MEK_PROFILE = TemplateProfile(
@@ -946,10 +947,10 @@ class PreviewExcelExportService:
         method: StdMethod,
         profile: TemplateProfile,
     ) -> dict[str, Decimal]:
-        """Use selected-STD RTs; legacy mixtures use the five-STD median."""
+        """Use selected-STD RTs; mixtures and Alcohol-2 use the set median."""
         if not profile.use_runtime_std_rt:
             return {}
-        if profile is LEGACY_PROFILE:
+        if profile in (LEGACY_PROFILE, ALCOHOL_PROFILE):
             selected_replicates = set(cls._std_replicates(profile, method))
             selected_standards = [
                 sample

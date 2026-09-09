@@ -48,6 +48,10 @@ EXPECTED_NEW_TYPES = (
 
 
 class AnalysisTypeRegistryTests(unittest.TestCase):
+    def test_heavy_metal_filename_markers_are_detected(self) -> None:
+        self.assertEqual(infer_analysis_type("중금속 240-281.pdf"), "중금속")
+        self.assertEqual(infer_analysis_type("ICPD 240-281.pdf"), "중금속")
+
     def test_only_ambiguous_analysis_types_remain_materials_pending(self) -> None:
         pending = {
             name for name in ANALYSIS_TYPE_NAMES if materials_pending_for(name)

@@ -5,6 +5,9 @@ from pathlib import Path
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
+
+from PySide6.QtWidgets import QApplication, QFileDialog
 
 from honyu_app.application.preview_excel_export import PreviewExcelExportService
 from honyu_app.domain.commands import SaveAnalysisBatchCommand
@@ -14,6 +17,7 @@ from honyu_app.infrastructure.excel.workbook_inspector import XlsxTemplateInspec
 from honyu_app.infrastructure.excel.workbook_validator import XlsxWorkbookValidator
 from honyu_app.infrastructure.excel.xml_cell_writer import XlsxXmlCellWriter
 from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
+from honyu_app.ui.pages.pdf_registration_page import PdfRegistrationPage
 
 
 ACTUAL_DIRECTORY = Path(os.environ.get(
@@ -74,6 +78,19 @@ class HeavyMetalActualRegressionTests(unittest.TestCase):
         l_keys = {(v.replicate_no, v.element) for v in self.batch.heavy_metal_recovery_values
                   if v.level == "blank" and v.below_limit}
         self.assertEqual({(r, e) for r in (1, 2, 3) for e in ("Al", "Sn", "Cu", "Zr")}, l_keys)
+
+    def test_numeric_filename_auto_selects_heavy_metal_immediately(self):
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as directory:
+            database = MockDatabaseService(Path(directory) / "ui.sqlite")
+            page = PdfRegistrationPage(None, LabSolutionsParser(), database)
+            with patch.object(QFileDialog, "getOpenFileName", return_value=(str(PDF), "PDF")):
+                page.choose_pdf()
+            self.assertEqual("중금속", page.analysis_type.currentText())
+            self.assertEqual(240, page.start_no.value())
+            self.assertEqual(281, page.end_no.value())
+            page.deleteLater()
+        app.processEvents()
 
     def test_db_preview_and_final_xlsx_are_exact(self):
         with tempfile.TemporaryDirectory() as directory:

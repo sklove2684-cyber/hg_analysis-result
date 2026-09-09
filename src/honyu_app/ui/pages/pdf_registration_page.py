@@ -22,6 +22,9 @@ from honyu_app.application.shared_folder import SharedFolderController
 from honyu_app.config.analysis_types import ANALYSIS_TYPE_NAMES, infer_analysis_type
 from honyu_app.domain.enums import HalfYear, ReviewStatus
 from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
+from honyu_app.infrastructure.pdf.analysis_type_detector import (
+    detect_analysis_type_from_pdf_content,
+)
 from honyu_app.services.database_service import DatabaseService
 from honyu_app.ui.theme import Card, field_label, make_path_label, set_status_tone
 
@@ -289,6 +292,8 @@ class PdfRegistrationPage(QWidget):
         self.pdf_path.setText(selected)
         detected = self.detect_analysis_type(selected_path.name)
         if detected is None:
+            detected = self.detect_pdf_content_analysis_type(selected_path)
+        if detected is None:
             self.analysis_type.setCurrentIndex(-1)
         else:
             self.analysis_type.setCurrentText(detected)
@@ -314,6 +319,10 @@ class PdfRegistrationPage(QWidget):
         materials: tuple[str, ...] = (),
     ) -> str | None:
         return infer_analysis_type(filename, method_filenames, materials)
+
+    @staticmethod
+    def detect_pdf_content_analysis_type(pdf_path: Path) -> str | None:
+        return detect_analysis_type_from_pdf_content(pdf_path)
 
     def _mark_analysis_type_user_selected(self, *_args) -> None:
         self._analysis_type_user_selected = True

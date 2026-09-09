@@ -52,6 +52,28 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
         self.assertEqual(infer_analysis_type("중금속 240-281.pdf"), "중금속")
         self.assertEqual(infer_analysis_type("ICPD 240-281.pdf"), "중금속")
 
+    def test_bc_filename_token_uses_ascii_boundaries(self) -> None:
+        for filename in (
+            "BC 100-120.pdf", "B.C 100-120.pdf", "(BC) 100-120.pdf",
+            "(B.C) 100-120.pdf", "BC_100-120.pdf", "bc-100-120.pdf",
+        ):
+            with self.subTest(filename=filename):
+                self.assertEqual(infer_analysis_type(filename), "B.C")
+        self.assertIsNone(infer_analysis_type("ABC 100-120.pdf"))
+        self.assertEqual(infer_analysis_type("셀로솔브 100-120.pdf"), "셀로솔브")
+        self.assertEqual(infer_analysis_type("IPA 100-120.pdf"), "IPA")
+        self.assertEqual(infer_analysis_type("혼유 100-120.pdf"), "혼유")
+
+    def test_bc_filename_wins_over_auxiliary_cellosolve_evidence(self) -> None:
+        self.assertEqual(
+            infer_analysis_type(
+                "BC 100-120.pdf",
+                method_filenames=("셀로솔브",),
+                materials=("2-Butoxyethanol", "2-Butoxyethyl acetate"),
+            ),
+            "B.C",
+        )
+
     def test_only_ambiguous_analysis_types_remain_materials_pending(self) -> None:
         pending = {
             name for name in ANALYSIS_TYPE_NAMES if materials_pending_for(name)

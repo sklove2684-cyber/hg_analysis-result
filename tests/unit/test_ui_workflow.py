@@ -479,6 +479,24 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
         registration._thread = None
         registration.deleteLater()
 
+    def test_bc_pdf_selection_sets_type_range_and_starts_extraction(self) -> None:
+        registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
+        pdf = Path(self.temp.name) / "BC 100-120.pdf"
+        pdf.touch()
+        with patch.object(QFileDialog, "getOpenFileName", return_value=(str(pdf), "PDF")):
+            registration.choose_pdf()
+
+        self.assertEqual(registration.analysis_type.currentText(), "B.C")
+        self.assertEqual(registration.start_no.value(), 100)
+        self.assertEqual(registration.end_no.value(), 120)
+        with patch.object(QThread, "start") as start:
+            registration.start_extraction()
+        start.assert_called_once_with()
+        self.assertIsNotNone(registration._thread)
+        registration._worker = None
+        registration._thread = None
+        registration.deleteLater()
+
     def test_g3_parenthesized_filename_does_not_block_selected_g3_extraction(self) -> None:
         registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
         pdf = Path(self.temp.name) / "혼유(G3-1,2디클로로에탄) 152-153@완료.pdf"

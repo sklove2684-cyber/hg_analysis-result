@@ -439,6 +439,8 @@ def infer_analysis_type(
         token in filename_evidence for token in ("1-btoh", "n-btoh")
     ):
         return "(알콜2) IBA,1-BTOH"
+    if re.search(r"(?<![0-9a-z])b(?:[.\s_-]*)c(?![0-9a-z])", filename_evidence):
+        return "B.C"
     if re.search(r"(?<![0-9a-z])ipa(?![0-9a-z])", filename_evidence):
         return "IPA"
     for display_name, tokens in rules:

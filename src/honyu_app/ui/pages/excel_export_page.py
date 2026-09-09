@@ -141,7 +141,8 @@ class ExcelExportPage(QWidget):
         self.std_method.addItem("방식 A  ·  STD1~5", StdMethod.A.value)
         self.std_method.addItem("방식 B  ·  STD1~4 + STD6", StdMethod.B.value)
         grid.addWidget(field_label("DB 분석 배치"), 0, 0)
-        grid.addWidget(field_label("STD 방식"), 0, 2)
+        self.std_method_label = field_label("STD 방식")
+        grid.addWidget(self.std_method_label, 0, 2)
         grid.addWidget(self.batch_combo, 1, 0)
         grid.addWidget(refresh, 1, 1)
         grid.addWidget(self.std_method, 1, 2)
@@ -335,6 +336,15 @@ class ExcelExportPage(QWidget):
 
     def _batch_changed(self, *_args) -> None:
         self._preview_input_changed()
+        batch_id = self.batch_combo.currentData()
+        heavy = False
+        if isinstance(batch_id, UUID):
+            try:
+                heavy = self._database.get_batch_detail(batch_id).analysis_type == "중금속"
+            except Exception:
+                pass
+        self.std_method.setVisible(not heavy)
+        self.std_method_label.setVisible(not heavy)
         self._refresh_output_filename()
 
     def _template_changed(self, *_args) -> None:

@@ -70,6 +70,21 @@ CREATE TABLE IF NOT EXISTS peaks (
     UNIQUE (sample_id, peak_no)
 );
 
+CREATE TABLE IF NOT EXISTS heavy_metal_recovery_values (
+    recovery_value_id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL REFERENCES analysis_batches(batch_id) ON DELETE CASCADE,
+    element TEXT NOT NULL,
+    sample_name TEXT NOT NULL,
+    level TEXT NOT NULL,
+    replicate_no INTEGER NOT NULL CHECK (replicate_no BETWEEN 1 AND 3),
+    value TEXT NOT NULL,
+    below_limit INTEGER NOT NULL DEFAULT 0 CHECK (below_limit IN (0, 1)),
+    source_page INTEGER NOT NULL,
+    source_row INTEGER,
+    created_at TEXT NOT NULL,
+    UNIQUE (batch_id, element, level, replicate_no)
+);
+
 CREATE TABLE IF NOT EXISTS peak_corrections (
     correction_id TEXT PRIMARY KEY,
     peak_id TEXT NOT NULL REFERENCES peaks(peak_id) ON DELETE CASCADE,

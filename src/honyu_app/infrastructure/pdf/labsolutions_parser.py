@@ -42,6 +42,13 @@ class LabSolutionsParser:
         progress_callback: Callable[[int, int], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ) -> AnalysisBatch:
+        if analysis_type == "중금속":
+            from honyu_app.infrastructure.pdf.heavy_metal_results_parser import HeavyMetalResultsParser
+            return HeavyMetalResultsParser().parse(
+                pdf_path, analysis_type=analysis_type,
+                analysis_no_start=analysis_no_start, analysis_no_end=analysis_no_end,
+                progress_callback=progress_callback, cancel_check=cancel_check,
+            )
         pdf_path = Path(pdf_path)
         if not pdf_path.is_file():
             raise ValidationError(f"PDF 파일을 찾을 수 없습니다: {pdf_path}")

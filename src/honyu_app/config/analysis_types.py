@@ -18,6 +18,7 @@ class AnalysisTypeDefinition:
     excel_profile_key: str | None = None
     materials_pending: bool = False
     allow_runtime_single_material_inference: bool = False
+    non_peak_analysis: bool = False
 
 
 def _material(canonical_name: str, *aliases: str) -> MaterialDefinition:
@@ -256,6 +257,10 @@ ANALYSIS_TYPES: tuple[AnalysisTypeDefinition, ...] = (
         G3_MATERIALS,
         "mixture_g3",
     ),
+    AnalysisTypeDefinition(
+        "heavy_metal", "중금속", excel_profile_key="heavy_metal",
+        non_peak_analysis=True,
+    ),
 )
 
 ANALYSIS_TYPE_NAMES = tuple(item.display_name for item in ANALYSIS_TYPES)
@@ -271,7 +276,8 @@ def validate_analysis_type_registry(
     definitions: tuple[AnalysisTypeDefinition, ...] = ANALYSIS_TYPES,
 ) -> None:
     for definition in definitions:
-        if not definition.supported_materials and not definition.materials_pending:
+        if (not definition.supported_materials and not definition.materials_pending
+                and not definition.non_peak_analysis):
             raise ValueError(
                 f"분석종류 '{definition.display_name}'에 지원 물질이 없습니다. "
                 "supported_materials를 등록하거나 materials_pending=True를 명시하세요."
@@ -388,6 +394,8 @@ def infer_analysis_type(
     filename_evidence = filename.casefold()
     compact_filename = re.sub(r"[^0-9a-z가-힣]+", "", filename_evidence)
     auxiliary_evidence = " ".join((*method_filenames, *materials)).casefold()
+    if any(token in filename_evidence for token in ("중금속", "icpd", "icp-d")):
+        return "중금속"
     # Specific names precede broad families. Short or ambiguous names are not guessed.
     rules: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("(혼유-G2) THF,CFM,벤젠,클로로벤젠", ("혼유-g2",)),

@@ -67,6 +67,18 @@ class Sample:
     sample_id: UUID = field(default_factory=uuid4)
 
 
+@dataclass(frozen=True, slots=True)
+class HeavyMetalRecoveryValue:
+    element: str
+    sample_name: str
+    level: str
+    replicate_no: int
+    value: Decimal
+    below_limit: bool = False
+    source_page: int = 0
+    source_row: int | None = None
+
+
 @dataclass(slots=True)
 class AnalysisBatch:
     batch_code: str
@@ -79,6 +91,7 @@ class AnalysisBatch:
     parser_layout_id: str
     extracted_at: datetime
     samples: list[Sample] = field(default_factory=list)
+    heavy_metal_recovery_values: list[HeavyMetalRecoveryValue] = field(default_factory=list)
     warning_count: int = 0
     review_status: ReviewStatus = ReviewStatus.PENDING
     workplace: str | None = None
@@ -111,8 +124,8 @@ class ExcelPreviewRow:
     material: str | None
     peak_no: int
     retention_time: Decimal
-    area_raw: int
-    applied_area: int
+    area_raw: int | Decimal
+    applied_area: int | Decimal
     dibk_area_rank: int | None = None
     target_sheet: str | None = None
     target_cell: str | None = None
@@ -165,7 +178,7 @@ class ExcelPreviewResult:
 class ExcelCellWrite:
     sheet: str
     address: str
-    value: int
+    value: int | Decimal
 
 
 @dataclass(frozen=True, slots=True)

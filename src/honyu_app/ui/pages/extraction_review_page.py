@@ -204,9 +204,14 @@ class ExtractionReviewPage(QWidget):
         self.refresh_table()
         saved = batch.review_status is ReviewStatus.SAVED
         prefix = "기존 DB 배치" if saved else "신규 추출 결과"
+        item_summary = (
+            f"회수율 값 {len(batch.heavy_metal_recovery_values)}개"
+            if batch.analysis_type == "중금속"
+            else f"Sample {len(batch.samples)}개"
+        )
         self.status.setText(
             f"{prefix}  ·  {batch.source_file.original_name}  ·  "
-            f"Sample {len(batch.samples)}개  ·  검토 경고 {batch.warning_count}개"
+            f"{item_summary}  ·  검토 경고 {batch.warning_count}개"
             + ("  ·  DB 저장 완료  ·  Excel 생성 가능" if saved else "")
         )
         set_status_tone(self.status, "success" if saved or not batch.warning_count else "warning")
@@ -235,10 +240,11 @@ class ExtractionReviewPage(QWidget):
         self.excel_button.setEnabled(saved)
         self.complete_button.setText("검토 완료됨" if saved or reviewed else "검토 완료")
         self.save_button.setText("DB 저장됨" if saved else "DB에 저장")
-        self.material_button.setEnabled(has_batch and not saved)
-        self.toggle_button.setEnabled(has_batch and not saved)
-        self.area_button.setEnabled(saved)
-        self.history_button.setEnabled(saved)
+        editable_peaks = has_batch and self._batch.analysis_type != "중금속"
+        self.material_button.setEnabled(editable_peaks and not saved)
+        self.toggle_button.setEnabled(editable_peaks and not saved)
+        self.area_button.setEnabled(editable_peaks and saved)
+        self.history_button.setEnabled(editable_peaks and saved)
 
     def open_excel_export(self) -> None:
         if self._batch is None or self._batch.review_status is not ReviewStatus.SAVED:
@@ -252,6 +258,24 @@ class ExtractionReviewPage(QWidget):
         if not self._batch:
             self._update_summary()
             return
+        if self._batch.analysis_type == "중금속":
+            columns = ("Sample", "구분", "원소", "Quant Average", "L 여부", "입력 여부")
+            self.table.setColumnCount(len(columns))
+            self.table.setHorizontalHeaderLabels(columns)
+            for value in self._batch.heavy_metal_recovery_values:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                data = (value.sample_name, value.level, value.element, str(value.value),
+                        "L" if value.below_limit else "", "예")
+                for column, item_value in enumerate(data):
+                    self.table.setItem(row, column, QTableWidgetItem(str(item_value)))
+            self.sample_count.setText("12")
+            self.peak_count.setText(f"{len(self._batch.heavy_metal_recovery_values):,}")
+            self.include_count.setText(f"{len(self._batch.heavy_metal_recovery_values):,}")
+            self.exclude_count.setText("0")
+            return
+        self.table.setColumnCount(len(COLUMNS))
+        self.table.setHorizontalHeaderLabels(COLUMNS)
         for sample in self._batch.samples:
             for peak in sample.peaks:
                 row = self.table.rowCount()

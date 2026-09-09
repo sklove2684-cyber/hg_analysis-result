@@ -21,7 +21,8 @@ from honyu_app.domain.errors import (
     RevisionConflictError,
     ValidationError,
 )
-from honyu_app.domain.models import AnalysisBatch, Peak, PeakCorrection, Sample, SourceFile
+from honyu_app.domain.models import (AnalysisBatch, HeavyMetalRecoveryValue, Peak,
+                                     PeakCorrection, Sample, SourceFile)
 from honyu_app.domain.queries import BatchSearchQuery
 from honyu_app.domain.results import (
     BatchSummary,
@@ -159,6 +160,7 @@ class MockDatabaseService:
                 )
                 for sample in batch.samples:
                     self._insert_sample(connection, batch.batch_id, sample, now)
+                self._insert_heavy_metal_values(connection, batch.batch_id, batch, now)
         except sqlite3.IntegrityError as exc:
             if "file_hash" in str(exc) or "source_files.file_hash" in str(exc):
                 raise DuplicateSourceFileError("동일한 PDF 해시가 이미 저장되어 있습니다.") from exc
@@ -235,8 +237,13 @@ class MockDatabaseService:
                 connection.execute(
                     "DELETE FROM samples WHERE batch_id = ?", (str(existing_batch_id),)
                 )
+                connection.execute(
+                    "DELETE FROM heavy_metal_recovery_values WHERE batch_id = ?",
+                    (str(existing_batch_id),),
+                )
                 for sample in batch.samples:
                     self._insert_sample(connection, existing_batch_id, sample, now)
+                self._insert_heavy_metal_values(connection, existing_batch_id, batch, now)
         except sqlite3.IntegrityError as exc:
             if "batch_code" in str(exc) or "analysis_batches.batch_code" in str(exc):
                 raise ValidationError("새 DB 배치 이름이 이미 존재합니다.") from exc
@@ -284,6 +291,19 @@ class MockDatabaseService:
                     peak.exclude_reason.value if peak.exclude_reason else None,
                     peak.source_page, now,
                 ),
+            )
+
+    @staticmethod
+    def _insert_heavy_metal_values(connection, batch_id, batch, now: str) -> None:
+        for item in batch.heavy_metal_recovery_values:
+            connection.execute(
+                """INSERT INTO heavy_metal_recovery_values (
+                    recovery_value_id, batch_id, element, sample_name, level,
+                    replicate_no, value, below_limit, source_page, source_row, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (str(uuid4()), str(batch_id), item.element, item.sample_name, item.level,
+                 item.replicate_no, str(item.value), int(item.below_limit),
+                 item.source_page, item.source_row, now),
             )
 
     def search_batches(self, query: BatchSearchQuery) -> list[BatchSummary]:
@@ -377,6 +397,17 @@ class MockDatabaseService:
                 ).fetchall()
                 peaks = [self._peak_from_row(value) for value in peak_rows]
                 samples.append(self._sample_from_row(row, peaks))
+            heavy_rows = connection.execute(
+                "SELECT * FROM heavy_metal_recovery_values WHERE batch_id = ? "
+                "ORDER BY source_page, source_row, element",
+                (str(batch_id),),
+            ).fetchall()
+            heavy_values = [HeavyMetalRecoveryValue(
+                element=row["element"], sample_name=row["sample_name"],
+                level=row["level"], replicate_no=row["replicate_no"],
+                value=Decimal(row["value"]), below_limit=bool(row["below_limit"]),
+                source_page=row["source_page"], source_row=row["source_row"],
+            ) for row in heavy_rows]
         source = SourceFile(
             original_name=batch_row["original_name"],
             full_path=Path(batch_row["full_path"]), file_hash=batch_row["file_hash"],
@@ -390,6 +421,7 @@ class MockDatabaseService:
             parser_name=batch_row["parser_name"], parser_version=batch_row["parser_version"],
             parser_layout_id=batch_row["parser_layout_id"],
             extracted_at=datetime.fromisoformat(batch_row["extracted_at"]), samples=samples,
+            heavy_metal_recovery_values=heavy_values,
             warning_count=batch_row["warning_count"],
             review_status=ReviewStatus(batch_row["review_status"]),
             workplace=batch_row["workplace"], year=batch_row["year"],

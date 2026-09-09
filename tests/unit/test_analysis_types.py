@@ -43,6 +43,7 @@ EXPECTED_NEW_TYPES = (
     "에틸렌글리콜",
     "(혼유-G2) THF,CFM,벤젠,클로로벤젠",
     "(혼유-G3) 1,2-디클로로에틸렌,퍼클로로에틸렌,프로판,에탄",
+    "중금속",
 )
 
 
@@ -215,6 +216,7 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
             "이소프로필 아세테이트",
             "피리딘",
             "페놀",
+            "중금속",
         ):
             self.assertTrue(has_excel_profile(name), name)
         for name in (
@@ -242,6 +244,7 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
                 "이소프로필 아세테이트",
                 "피리딘",
                 "페놀",
+                "중금속",
             }
         ):
             self.assertFalse(has_excel_profile(name), name)

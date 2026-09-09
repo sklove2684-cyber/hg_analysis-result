@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from decimal import Decimal
 from pathlib import Path
 import re
 from xml.etree import ElementTree as ET
@@ -93,8 +94,10 @@ class XlsxXmlCellWriter:
             if key in seen:
                 raise ExcelExportError(f"중복 입력 셀입니다: {item.sheet}!{address}")
             seen.add(key)
+            if isinstance(item.value, bool) or not isinstance(item.value, (int, Decimal)):
+                raise ExcelExportError(f"Excel 숫자만 입력할 수 있습니다: {item.sheet}!{address}")
             grouped.setdefault(item.sheet, []).append(
-                ExcelCellWrite(item.sheet, address, int(item.value))
+                ExcelCellWrite(item.sheet, address, item.value)
             )
 
         try:

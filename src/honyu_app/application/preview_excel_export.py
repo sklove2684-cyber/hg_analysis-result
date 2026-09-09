@@ -739,6 +739,9 @@ class PreviewExcelExportService:
         template_path: Path,
         std_method: StdMethod | str,
     ) -> ExcelPreviewResult:
+        if batch.analysis_type == "중금속":
+            snapshot = self._template_service.inspect(Path(template_path))
+            return self._preview_heavy_metal(batch, Path(template_path), snapshot)
         try:
             method = StdMethod(std_method)
         except ValueError as exc:
@@ -848,6 +851,70 @@ class PreviewExcelExportService:
                 stoddard_cs2_rt=stoddard_cs2_rt,
             )
         self._detect_target_collisions(result)
+        return result
+
+    @staticmethod
+    def _preview_heavy_metal(
+        batch: AnalysisBatch, template_path: Path, snapshot: ExcelTemplateSnapshot
+    ) -> ExcelPreviewResult:
+        result = ExcelPreviewResult(template_path, "N/A")
+        required_sheets = ("LOD(고온물질)", "회수율", "분석결과")
+        if not all(sheet in snapshot.sheet_names for sheet in required_sheets):
+            result.issues.append(ExcelPreviewIssue(
+                ValidationSeverity.ERROR, "TEMPLATE_PROFILE_MISMATCH",
+                "중금속 Excel 필수 시트(LOD(고온물질), 회수율, 분석결과)가 없습니다.",
+            ))
+            return result
+        labels = {
+            "A3": "Fe-1", "K3": "Sn-1", "A12": "Mn-1", "K12": "Ti-1",
+            "A21": "Al-1", "K21": "Cu-1", "A30": "Cr-1", "K30": "Zr-1",
+            "A39": "Zn-1", "K39": "Ni-1",
+        }
+        bad = [f"{cell}={snapshot.cell('회수율', cell).value!r}" for cell, expected in labels.items()
+               if snapshot.cell("회수율", cell).value != expected]
+        if bad:
+            result.issues.append(ExcelPreviewIssue(
+                ValidationSeverity.ERROR, "TEMPLATE_PROFILE_MISMATCH",
+                "중금속 회수율 양식 라벨이 일치하지 않습니다: " + ", ".join(bad),
+            ))
+            return result
+        starts = {
+            "Fe": ("D", "E", 3), "Sn": ("N", "O", 3),
+            "Mn": ("D", "E", 12), "Ti": ("N", "O", 12),
+            "Al": ("D", "E", 21), "Cu": ("N", "O", 21),
+            "Cr": ("D", "E", 30), "Zr": ("N", "O", 30),
+            "Zn": ("D", "E", 39), "Ni": ("N", "O", 39),
+        }
+        offsets = {"blank": 0, "low": 0, "mid": 3, "high": 6}
+        for item in batch.heavy_metal_recovery_values:
+            blank_col, recovery_col, base_row = starts[item.element]
+            column = blank_col if item.level == "blank" else recovery_col
+            row = base_row + (item.replicate_no - 1)
+            if item.level != "blank":
+                row += offsets[item.level]
+            address = f"{column}{row}"
+            cell = snapshot.cell("회수율", address)
+            if cell.has_formula:
+                result.issues.append(ExcelPreviewIssue(
+                    ValidationSeverity.ERROR, "TARGET_CELL_HAS_FORMULA",
+                    f"수식 셀에는 입력할 수 없습니다: 회수율!{address}",
+                    item.sample_name, "회수율", address,
+                ))
+                continue
+            result.rows.append(ExcelPreviewRow(
+                sample_name=item.sample_name,
+                sample_type=(SampleType.RECOVERY_BLANK if item.level == "blank" else SampleType.RECOVERY),
+                material=item.element, peak_no=item.replicate_no,
+                retention_time=Decimal("0"), area_raw=item.value,
+                applied_area=item.value, target_sheet="회수율", target_cell=address,
+                existing_value_type=cell.value_type, existing_has_formula=cell.has_formula,
+                message="L" if item.below_limit else None,
+            ))
+        if len(result.rows) != 120:
+            result.issues.append(ExcelPreviewIssue(
+                ValidationSeverity.ERROR, "HEAVY_METAL_WRITE_COUNT_MISMATCH",
+                f"중금속 회수율 입력은 120개여야 합니다: {len(result.rows)}개",
+            ))
         return result
 
     @classmethod

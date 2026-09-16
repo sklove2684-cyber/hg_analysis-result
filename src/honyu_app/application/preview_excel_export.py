@@ -30,6 +30,7 @@ from honyu_app.domain.models import (
     Peak,
     Sample,
 )
+from honyu_app.infrastructure.pdf.heavy_metal_layout import ELEMENT_SYMBOLS
 from honyu_app.services.database_service import DatabaseService
 from honyu_app.services.excel_template_service import (
     ExcelTemplateService,
@@ -65,6 +66,28 @@ LEGACY_RECOVERY_ROW_START = {
     ConcentrationLevel.HIGH: 43,
 }
 DIBK_STD_CLUSTER_TOLERANCE = Decimal("0.080")
+
+
+def _column_number(name: str) -> int:
+    value = 0
+    for character in name:
+        value = value * 26 + ord(character.upper()) - ord("A") + 1
+    return value
+
+
+def _column_name(number: int) -> str:
+    result = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        result = chr(ord("A") + remainder) + result
+    return result
+
+
+def _cell_position(address: str) -> tuple[int, int]:
+    match = re.fullmatch(r"([A-Z]+)([1-9][0-9]*)", address.upper())
+    if match is None:
+        raise ValueError(f"invalid Excel cell address: {address}")
+    return _column_number(match.group(1)), int(match.group(2))
 
 
 @dataclass(frozen=True)
@@ -865,29 +888,78 @@ class PreviewExcelExportService:
                 "중금속 Excel 필수 시트(LOD(고온물질), 회수율, 분석결과)가 없습니다.",
             ))
             return result
-        labels = {
-            "A3": "Fe-1", "K3": "Sn-1", "A12": "Mn-1", "K12": "Ti-1",
-            "A21": "Al-1", "K21": "Cu-1", "A30": "Cr-1", "K30": "Zr-1",
-            "A39": "Zn-1", "K39": "Ni-1",
-        }
-        bad = [f"{cell}={snapshot.cell('회수율', cell).value!r}" for cell, expected in labels.items()
-               if snapshot.cell("회수율", cell).value != expected]
-        if bad:
+        blocks: dict[str, tuple[int, int]] = {}
+        seen_elements: set[str] = set()
+        invalid_blocks: list[str] = []
+        for (sheet, address), cell in snapshot.cells.items():
+            if sheet != "회수율" or not isinstance(cell.value, str):
+                continue
+            match = re.fullmatch(r"([A-Z][a-z]?)-([0-9]+)", cell.value.strip())
+            if match is None or match.group(1) not in ELEMENT_SYMBOLS:
+                continue
+            element = match.group(1)
+            if element in seen_elements:
+                invalid_blocks.append(f"{element} 라벨 중복")
+                continue
+            seen_elements.add(element)
+            label_column, base_row = _cell_position(address)
+            level_column = _column_name(label_column + 1)
+            blank_column = _column_name(label_column + 3)
+            recovery_column = _column_name(label_column + 4)
+            expected_structure = (
+                (f"{level_column}{base_row}", "저"),
+                (f"{level_column}{base_row + 3}", "중"),
+                (f"{level_column}{base_row + 6}", "고"),
+            )
+            bad = [
+                f"{target}={snapshot.cell('회수율', target).value!r}"
+                for target, expected in expected_structure
+                if str(snapshot.cell("회수율", target).value or "").strip() != expected
+            ]
+            header_found = any(
+                str(snapshot.cell("회수율", f"{blank_column}{row}").value or "").strip()
+                == "BLANK"
+                and str(
+                    snapshot.cell("회수율", f"{recovery_column}{row}").value or ""
+                ).strip() == "검출량"
+                for row in range(1, base_row)
+            )
+            if not header_found:
+                bad.append(f"{blank_column}/{recovery_column} BLANK/검출량 헤더 없음")
+            if bad:
+                invalid_blocks.append(f"{element}({address}): " + ", ".join(bad))
+            else:
+                blocks[element] = (label_column, base_row)
+        if invalid_blocks or not blocks:
             result.issues.append(ExcelPreviewIssue(
                 ValidationSeverity.ERROR, "TEMPLATE_PROFILE_MISMATCH",
-                "중금속 회수율 양식 라벨이 일치하지 않습니다: " + ", ".join(bad),
+                "중금속 회수율 원소 블록 구조가 일치하지 않습니다: "
+                + ", ".join(invalid_blocks or ["원소 라벨 없음"]),
             ))
             return result
-        starts = {
-            "Fe": ("D", "E", 3), "Sn": ("N", "O", 3),
-            "Mn": ("D", "E", 12), "Ti": ("N", "O", 12),
-            "Al": ("D", "E", 21), "Cu": ("N", "O", 21),
-            "Cr": ("D", "E", 30), "Zr": ("N", "O", 30),
-            "Zn": ("D", "E", 39), "Ni": ("N", "O", 39),
-        }
+        pdf_elements = tuple(dict.fromkeys(
+            item.element for item in batch.heavy_metal_recovery_values
+        ))
+        missing_elements = [element for element in pdf_elements if element not in blocks]
+        if missing_elements:
+            result.issues.append(ExcelPreviewIssue(
+                ValidationSeverity.ERROR, "HEAVY_METAL_ELEMENT_NOT_IN_TEMPLATE",
+                "PDF 원소에 대응하는 회수율 Excel 블록이 없습니다: "
+                + ", ".join(missing_elements),
+            ))
+            return result
+        pdf_element_set = set(pdf_elements)
+        excel_only = [element for element in blocks if element not in pdf_element_set]
+        if excel_only:
+            result.issues.append(ExcelPreviewIssue(
+                ValidationSeverity.WARNING, "HEAVY_METAL_EXCEL_ONLY_ELEMENTS",
+                "PDF에 없어 입력하지 않는 Excel 원소: " + ", ".join(excel_only),
+            ))
         offsets = {"blank": 0, "low": 0, "mid": 3, "high": 6}
         for item in batch.heavy_metal_recovery_values:
-            blank_col, recovery_col, base_row = starts[item.element]
+            label_column, base_row = blocks[item.element]
+            blank_col = _column_name(label_column + 3)
+            recovery_col = _column_name(label_column + 4)
             column = blank_col if item.level == "blank" else recovery_col
             row = base_row + (item.replicate_no - 1)
             if item.level != "blank":
@@ -910,10 +982,13 @@ class PreviewExcelExportService:
                 existing_value_type=cell.value_type, existing_has_formula=cell.has_formula,
                 message="L" if item.below_limit else None,
             ))
-        if len(result.rows) != 120:
+        expected_count = len(pdf_elements) * 12
+        if len(result.rows) != expected_count:
             result.issues.append(ExcelPreviewIssue(
                 ValidationSeverity.ERROR, "HEAVY_METAL_WRITE_COUNT_MISMATCH",
-                f"중금속 회수율 입력은 120개여야 합니다: {len(result.rows)}개",
+                f"중금속 회수율 입력은 원소별 12개여야 합니다: "
+                f"원소 {len(pdf_elements)}개, 기대 {expected_count}개, "
+                f"실제 {len(result.rows)}개",
             ))
         return result
 

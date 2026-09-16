@@ -13,16 +13,18 @@ import pdfplumber
 from honyu_app.domain.enums import ReviewStatus
 from honyu_app.domain.errors import ExtractionCancelledError, ValidationError
 from honyu_app.domain.models import AnalysisBatch, HeavyMetalRecoveryValue, SourceFile
+from honyu_app.infrastructure.pdf.heavy_metal_layout import (
+    find_heavy_metal_table_layout,
+)
 
 
-ELEMENTS = ("Fe", "Mn", "Al", "Cr", "Sn", "Ti", "Cu", "Zr", "Zn", "Ni")
 RECOVERY_NAMES = {"저": "low", "중": "mid", "고": "high"}
 
 
 class HeavyMetalResultsParser:
     name = "heavy-metal-pdfplumber"
-    version = "1.0.0"
-    layout_id = "list-of-results-quant-average-10-v1"
+    version = "1.1.0"
+    layout_id = "list-of-results-quant-average-dynamic-v2"
 
     def parse(self, pdf_path: Path, *, analysis_type: str, analysis_no_start: int,
               analysis_no_end: int, progress_callback: Callable[[int, int], None] | None = None,
@@ -33,6 +35,7 @@ class HeavyMetalResultsParser:
         raw = path.read_bytes()
         values: list[HeavyMetalRecoveryValue] = []
         blank_no = 0
+        pdf_elements: tuple[str, ...] | None = None
         with pdfplumber.open(path) as pdf:
             page_count = len(pdf.pages)
             for page_no, page in enumerate(pdf.pages, 1):
@@ -41,22 +44,34 @@ class HeavyMetalResultsParser:
                 for table in page.extract_tables():
                     if not table:
                         continue
-                    header = next(
-                        (row for row in table if row and any("Quant" in (c or "") for c in row)),
-                        None,
-                    )
-                    if header is None:
+                    try:
+                        layout = find_heavy_metal_table_layout(table)
+                    except ValueError as exc:
+                        raise ValidationError(
+                            "PDF_LAYOUT_MISMATCH: 중복된 원소 헤더가 있습니다."
+                        ) from exc
+                    if layout is None:
                         continue
-                    columns = []
-                    for element in ELEMENTS:
-                        found = [i for i, cell in enumerate(header) if element in (cell or "") and "Quant" in (cell or "")]
-                        if len(found) != 1:
-                            raise ValidationError("PDF_LAYOUT_MISMATCH: Quant Average 10개 원소 헤더를 확인할 수 없습니다.")
-                        columns.append(found[0])
-                    for source_row, row in enumerate(table, 1):
-                        if len(row) <= max(columns):
+                    table_elements = tuple(
+                        element for element, _ in layout.element_columns
+                    )
+                    if pdf_elements is None:
+                        pdf_elements = table_elements
+                    elif set(table_elements) != set(pdf_elements):
+                        raise ValidationError(
+                            "PDF_LAYOUT_MISMATCH: 페이지별 원소 헤더 구성이 다릅니다."
+                        )
+                    max_column = max(
+                        layout.sample_name_column,
+                        *(column for _, column in layout.element_columns),
+                    )
+                    data_rows = table[layout.header_row + 1:]
+                    for source_row, row in enumerate(
+                        data_rows, layout.header_row + 2
+                    ):
+                        if len(row) <= max_column:
                             continue
-                        sample_name = (row[3] or "").strip() if len(row) > 3 else ""
+                        sample_name = (row[layout.sample_name_column] or "").strip()
                         if sample_name == "회수율-B":
                             blank_no += 1
                             level, replicate = "blank", blank_no
@@ -67,7 +82,7 @@ class HeavyMetalResultsParser:
                             level, replicate = RECOVERY_NAMES[match.group(1)], int(match.group(2))
                         if replicate not in {1, 2, 3}:
                             raise ValidationError("PDF_LAYOUT_MISMATCH: 회수율 반복 번호가 1~3 범위를 벗어났습니다.")
-                        for element, col in zip(ELEMENTS, columns):
+                        for element, col in layout.element_columns:
                             value, below_limit = self._quant_value(row[col], page_no, source_row)
                             values.append(HeavyMetalRecoveryValue(
                                 element, sample_name, level, replicate, value,
@@ -75,12 +90,27 @@ class HeavyMetalResultsParser:
                             ))
                 if progress_callback:
                     progress_callback(page_no, page_count)
-        keys = [(v.element, v.level, v.replicate_no) for v in values]
-        duplicates = [key for key, count in Counter(keys).items() if count != 1]
-        if len(values) != 120 or duplicates:
+        if not pdf_elements:
             raise ValidationError(
-                f"PDF_LAYOUT_MISMATCH: 회수율 값은 정확히 120개여야 합니다 "
-                f"(추출 {len(values)}개, 중복 {len(duplicates)}개)."
+                "PDF_LAYOUT_MISMATCH: Quant Average 원소 헤더를 확인할 수 없습니다."
+            )
+        keys = [(v.element, v.level, v.replicate_no) for v in values]
+        counts = Counter(keys)
+        expected_keys = {
+            (element, level, replicate)
+            for element in pdf_elements
+            for level in ("blank", "low", "mid", "high")
+            for replicate in (1, 2, 3)
+        }
+        missing = expected_keys - counts.keys()
+        duplicates = [key for key, count in counts.items() if count != 1]
+        expected_count = len(pdf_elements) * 12
+        if len(values) != expected_count or missing or duplicates:
+            raise ValidationError(
+                "PDF_LAYOUT_MISMATCH: 회수율 값은 원소별 12개여야 합니다 "
+                f"(원소 {len(pdf_elements)}개, 기대 {expected_count}개, "
+                f"추출 {len(values)}개, 누락 {len(missing)}개, "
+                f"중복 {len(duplicates)}개)."
             )
         now = datetime.now().astimezone()
         return AnalysisBatch(

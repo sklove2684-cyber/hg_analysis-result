@@ -27,6 +27,7 @@ ACTUAL_DIRECTORY = Path(os.environ.get(
 PDF = ACTUAL_DIRECTORY / "240-281.pdf"
 XLSX = ACTUAL_DIRECTORY / "240-281.xlsx"
 PDF_282_313 = ACTUAL_DIRECTORY / "282-313.pdf"
+XLSX_282_313 = ACTUAL_DIRECTORY / "282-313.xlsx"
 
 
 def _actual_files_available() -> bool:
@@ -119,8 +120,26 @@ class HeavyMetalActualRegressionTests(unittest.TestCase):
             self.assertEqual(("LOD(고온물질)", "회수율", "분석결과"), final.sheet_names)
 
 
-@unittest.skipUnless(PDF_282_313.is_file(), "중금속 282-313 실제 PDF가 필요합니다.")
+def _new_actual_files_available() -> bool:
+    try:
+        return PDF_282_313.is_file() and XLSX_282_313.is_file()
+    except OSError:
+        return False
+
+
+@unittest.skipUnless(
+    _new_actual_files_available(), "중금속 282-313 실제 PDF/XLSX가 필요합니다."
+)
 class HeavyMetal282To313ActualRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.batch = LabSolutionsParser().parse(
+            PDF_282_313,
+            analysis_type="중금속",
+            analysis_no_start=282,
+            analysis_no_end=313,
+        )
+
     def test_numeric_filename_auto_selects_pb_heavy_metal_layout(self):
         app = QApplication.instance() or QApplication([])
         with tempfile.TemporaryDirectory() as directory:
@@ -136,6 +155,69 @@ class HeavyMetal282To313ActualRegressionTests(unittest.TestCase):
             self.assertTrue(page.extract_button.isEnabled())
             page.deleteLater()
         app.processEvents()
+
+    def test_dynamic_pdf_elements_and_value_count(self):
+        elements = tuple(dict.fromkeys(
+            value.element for value in self.batch.heavy_metal_recovery_values
+        ))
+        self.assertEqual(
+            ("Fe", "Mn", "Al", "Cr", "Sn", "Ti", "Cu", "Zr", "Pb"),
+            elements,
+        )
+        self.assertEqual(108, len(self.batch.heavy_metal_recovery_values))
+
+    def test_db_preview_and_final_xlsx_write_only_common_elements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = MockDatabaseService(root / "db.sqlite")
+            db.save_analysis_batch(SaveAnalysisBatchCommand(self.batch))
+            loaded = db.get_batch_detail(self.batch.batch_id)
+            self.assertEqual(108, len(loaded.heavy_metal_recovery_values))
+            preview = PreviewExcelExportService(db, XlsxTemplateInspector()).preview(
+                self.batch.batch_id, XLSX_282_313, "A"
+            )
+            self.assertTrue(preview.can_generate, preview.issues)
+            self.assertEqual(108, preview.mapped_count)
+            self.assertEqual(
+                {"Fe", "Mn", "Al", "Cr", "Sn", "Ti", "Cu", "Zr", "Pb"},
+                {row.material for row in preview.rows},
+            )
+            warning = next(
+                issue for issue in preview.issues
+                if issue.code == "HEAVY_METAL_EXCEL_ONLY_ELEMENTS"
+            )
+            self.assertIn("Zn", warning.message)
+            self.assertIn("Ni", warning.message)
+            writes = [
+                ExcelCellWrite(row.target_sheet, row.target_cell, row.applied_area)
+                for row in preview.rows
+            ]
+            output = root / "282-313-result.xlsx"
+            XlsxXmlCellWriter().write_copy(XLSX_282_313, output, writes)
+            validation = XlsxWorkbookValidator().validate(
+                XLSX_282_313, output, writes, after_excel_recalculation=False
+            )
+            self.assertTrue(validation.valid, validation.errors)
+            source = XlsxTemplateInspector().inspect(XLSX_282_313)
+            final = XlsxTemplateInspector().inspect(output)
+            for element in ("Zn", "Ni"):
+                label = next(
+                    cell for (sheet, _), cell in source.cells.items()
+                    if sheet == "회수율" and str(cell.value).startswith(f"{element}-")
+                )
+                column = ord(label.address[0]) - ord("A") + 1
+                base_row = int(label.address[1:])
+                blank_column = chr(ord("A") + column + 2)
+                recovery_column = chr(ord("A") + column + 3)
+                addresses = [
+                    *(f"{blank_column}{base_row + offset}" for offset in range(3)),
+                    *(f"{recovery_column}{base_row + offset}" for offset in range(9)),
+                ]
+                for address in addresses:
+                    self.assertEqual(
+                        source.cell("회수율", address).value,
+                        final.cell("회수율", address).value,
+                    )
 
 
 if __name__ == "__main__":

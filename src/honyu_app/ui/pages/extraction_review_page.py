@@ -204,7 +204,11 @@ class ExtractionReviewPage(QWidget):
         self.refresh_table()
         saved = batch.review_status is ReviewStatus.SAVED
         prefix = "기존 DB 배치" if saved else "신규 추출 결과"
+        heavy_metal_elements = {
+            value.element for value in batch.heavy_metal_recovery_values
+        }
         item_summary = (
+            f"원소 {len(heavy_metal_elements)}개  ·  "
             f"회수율 값 {len(batch.heavy_metal_recovery_values)}개"
             if batch.analysis_type == "중금속"
             else f"Sample {len(batch.samples)}개"

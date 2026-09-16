@@ -7,20 +7,26 @@ from honyu_app.infrastructure.pdf.analysis_type_detector import (
 )
 
 
-LEGACY_ELEMENT_HEADER = "Fe Mn Al Cr Sn Ti Cu Zr Zn Ni"
-PB_ELEMENT_HEADER = "Fe Mn Al Cr Sn Ti Cu Zr Pb"
+def heavy_metal_table(elements: tuple[str, ...]) -> list[list[str]]:
+    header = ["Sample Name", *(f"{element}\nQuant\nAverage" for element in elements)]
+    rows = [
+        [name, *(["0.1"] * len(elements))]
+        for name in ("회수율-B", "저1", "중1", "고1")
+    ]
+    return [header, *rows]
 
 
 class PdfAnalysisTypeContentDetectorTests(unittest.TestCase):
     @staticmethod
-    def _detect(*page_texts: str) -> str | None:
-        pages = []
-        for text in page_texts:
+    def _detect(*pages: tuple[str, list[list[str]]]) -> str | None:
+        page_mocks = []
+        for text, table in pages:
             page = MagicMock()
             page.extract_text.return_value = text
-            pages.append(page)
+            page.extract_tables.return_value = [table] if table else []
+            page_mocks.append(page)
         document = MagicMock()
-        document.pages = pages
+        document.pages = page_mocks
         context = MagicMock()
         context.__enter__.return_value = document
         with patch(
@@ -29,41 +35,46 @@ class PdfAnalysisTypeContentDetectorTests(unittest.TestCase):
         ):
             return detect_analysis_type_from_pdf_content(Path("123-150.pdf"))
 
-    def test_split_heavy_metal_headers_are_detected(self) -> None:
-        text = "\n".join((
-            "List of Results", LEGACY_ELEMENT_HEADER,
-            " ".join(["Quant"] * 10), " ".join(["Average"] * 10),
-        ))
-        self.assertEqual("중금속", self._detect(text))
+    def test_dynamic_nine_element_layout_is_detected(self) -> None:
+        elements = ("Fe", "Mn", "Al", "Cr", "Sn", "Ti", "Cu", "Zr", "Pb")
+        self.assertEqual(
+            "중금속",
+            self._detect(("List of Results", heavy_metal_table(elements))),
+        )
 
-    def test_pb_nine_element_layout_is_detected_without_sequence_dependency(self) -> None:
-        text = "\n".join((
-            "List of Results",
-            "Fe Quant Average\nMn Quant Average\nAl Quant Average",
-            "Cr Quant Average\nSn Quant Average\nTi Quant Average",
-            "Cu Quant Average\nZr Quant Average\nPb Quant Average",
-        ))
-        self.assertEqual("중금속", self._detect(text))
+    def test_element_order_and_count_are_not_fixed(self) -> None:
+        elements = (
+            "In", "Pt", "Be", "As", "V", "Ba", "Sb", "Co", "Cd", "W", "Mg", "Fe"
+        )
+        self.assertEqual(
+            "중금속",
+            self._detect(("List of Results", heavy_metal_table(elements))),
+        )
 
     def test_first_three_pages_are_scanned(self) -> None:
-        heavy_metal_page = "\n".join((
-            "List of Results", PB_ELEMENT_HEADER,
-            " ".join(["Quant"] * 9), " ".join(["Average"] * 9),
+        table = heavy_metal_table(("Fe", "Mn", "Pb"))
+        self.assertEqual(
+            "중금속",
+            self._detect(("cover", []), ("List of Results", table)),
+        )
+        self.assertIsNone(self._detect(
+            ("cover", []), ("notes", []), ("other", []), ("List of Results", table)
         ))
-        self.assertEqual("중금속", self._detect("cover", heavy_metal_page))
-        self.assertIsNone(self._detect("cover", "notes", "other", heavy_metal_page))
 
     def test_numeric_named_gc_peak_table_is_not_misclassified(self) -> None:
         text = "<Sample Information>\nSample Name: 123\nPeak# R.Time Area Height Name"
-        self.assertIsNone(self._detect(text))
+        self.assertIsNone(self._detect((text, [])))
 
-    def test_partial_element_header_is_not_enough(self) -> None:
-        text = "List of Results\nFe Mn Al Cr\nQuant Quant Quant Quant\nAverage Average"
-        self.assertIsNone(self._detect(text))
+    def test_list_of_results_without_recovery_rows_is_not_enough(self) -> None:
+        table = [[
+            "Sample Name", "Fe\nQuant\nAverage",
+            "Mn\nQuant\nAverage", "Pb\nQuant\nAverage",
+        ]]
+        self.assertIsNone(self._detect(("List of Results", table)))
 
-    def test_all_elements_without_result_table_structure_are_not_enough(self) -> None:
-        text = f"List of Results\n{LEGACY_ELEMENT_HEADER}\nQuant Average"
-        self.assertIsNone(self._detect(text))
+    def test_fewer_than_three_element_columns_is_not_enough(self) -> None:
+        table = heavy_metal_table(("Fe", "Pb"))
+        self.assertIsNone(self._detect(("List of Results", table)))
 
 
 if __name__ == "__main__":

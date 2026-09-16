@@ -26,6 +26,7 @@ ACTUAL_DIRECTORY = Path(os.environ.get(
 ))
 PDF = ACTUAL_DIRECTORY / "240-281.pdf"
 XLSX = ACTUAL_DIRECTORY / "240-281.xlsx"
+PDF_282_313 = ACTUAL_DIRECTORY / "282-313.pdf"
 
 
 def _actual_files_available() -> bool:
@@ -116,6 +117,25 @@ class HeavyMetalActualRegressionTests(unittest.TestCase):
             for write in writes:
                 self.assertEqual(float(write.value), final.cell(write.sheet, write.address).value)
             self.assertEqual(("LOD(고온물질)", "회수율", "분석결과"), final.sheet_names)
+
+
+@unittest.skipUnless(PDF_282_313.is_file(), "중금속 282-313 실제 PDF가 필요합니다.")
+class HeavyMetal282To313ActualRegressionTests(unittest.TestCase):
+    def test_numeric_filename_auto_selects_pb_heavy_metal_layout(self):
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as directory:
+            database = MockDatabaseService(Path(directory) / "ui.sqlite")
+            page = PdfRegistrationPage(None, LabSolutionsParser(), database)
+            with patch.object(
+                QFileDialog, "getOpenFileName", return_value=(str(PDF_282_313), "PDF")
+            ):
+                page.choose_pdf()
+            self.assertEqual("중금속", page.analysis_type.currentText())
+            self.assertEqual(282, page.start_no.value())
+            self.assertEqual(313, page.end_no.value())
+            self.assertTrue(page.extract_button.isEnabled())
+            page.deleteLater()
+        app.processEvents()
 
 
 if __name__ == "__main__":

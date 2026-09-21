@@ -1235,6 +1235,99 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         )
         self.assertTrue(result.can_generate)
 
+    def test_mixture_runtime_rt_keeps_single_peak_median_behavior(self) -> None:
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[Peak(
+                    1, Decimal(rt), repeat * 100,
+                    material_raw="o", material_standard="o-xylene",
+                )],
+            )
+            for repeat, rt in enumerate(
+                ("10.678", "10.680", "10.685", "10.694", "10.702"), 1
+            )
+        ]
+        targets = PreviewExcelExportService._runtime_target_retention_times(
+            standards, set(), StdMethod.A, LEGACY_PROFILE
+        )
+        self.assertEqual(targets["o-xylene"], Decimal("10.685"))
+
+    def test_mixture_runtime_rt_selects_highest_std_coverage_cluster(self) -> None:
+        standard_rts = {
+            1: ("10.678",),
+            2: ("10.680",),
+            3: ("10.685", "10.826"),
+            4: ("10.694", "10.830"),
+            5: ("10.702", "10.832"),
+            6: ("10.707", "10.833"),
+        }
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[
+                    Peak(
+                        number, Decimal(rt), repeat * 100 + number,
+                        material_raw="o", material_standard="o-xylene",
+                    )
+                    for number, rt in enumerate(rts, 1)
+                ],
+            )
+            for repeat, rts in standard_rts.items()
+        ]
+        for method in (StdMethod.A, StdMethod.B):
+            with self.subTest(method=method):
+                targets = PreviewExcelExportService._runtime_target_retention_times(
+                    standards, set(), method, LEGACY_PROFILE
+                )
+                self.assertEqual(targets["o-xylene"], Decimal("10.685"))
+
+    def test_mixture_runtime_rt_rejects_equal_coverage_clusters(self) -> None:
+        standards = [
+            Sample(
+                repeat,
+                f"STD{repeat}",
+                f"STD{repeat}",
+                SampleType.STD,
+                replicate_no=repeat,
+                peaks=[
+                    Peak(
+                        1, Decimal(f"10.0{repeat}"), repeat * 100,
+                        material_raw="o", material_standard="o-xylene",
+                    ),
+                    Peak(
+                        2, Decimal(f"11.0{repeat}"), repeat * 10,
+                        material_raw="o", material_standard="o-xylene",
+                    ),
+                ],
+            )
+            for repeat in range(1, 6)
+        ]
+        ambiguous: set[str] = set()
+        targets = PreviewExcelExportService._runtime_target_retention_times(
+            standards,
+            set(),
+            StdMethod.A,
+            LEGACY_PROFILE,
+            ambiguous_materials=ambiguous,
+        )
+        self.assertNotIn("o-xylene", targets)
+        self.assertEqual(ambiguous, {"o-xylene"})
+        result = self.service(snapshot()).preview_batch(
+            batch(standards), Path("template.xlsx"), StdMethod.A
+        )
+        self.assertTrue(any(
+            issue.code == "STD_TARGET_RT_AMBIGUOUS" for issue in result.issues
+        ))
+
     def test_dibk_assigns_every_peak_to_nearest_slot_without_fixed_tolerance(self) -> None:
         def dibk_peak(number: int, rt: str, area: int) -> Peak:
             return Peak(
@@ -1530,7 +1623,7 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         )
         result = self.service().preview_batch(batch([std]), Path("template.xlsx"), "A")
         self.assertFalse(result.can_generate)
-        self.assertEqual(result.issues[0].code, "STD_TARGET_RT_NOT_FOUND")
+        self.assertEqual(result.issues[0].code, "STD_TARGET_RT_AMBIGUOUS")
         self.assertTrue(
             all(row.status is ExcelPreviewStatus.ERROR for row in result.rows)
         )

@@ -66,6 +66,7 @@ LEGACY_RECOVERY_ROW_START = {
     ConcentrationLevel.HIGH: 43,
 }
 DIBK_STD_CLUSTER_TOLERANCE = Decimal("0.080")
+RUNTIME_STD_CLUSTER_TOLERANCE = Decimal("0.080")
 
 
 def _column_number(name: str) -> int:
@@ -812,17 +813,31 @@ class PreviewExcelExportService:
         excluded_std_samples = self._select_legacy_std_set(
             batch.samples, method, profile, result
         )
+        ambiguous_runtime_materials: set[str] = set()
         runtime_target_retention_times = self._runtime_target_retention_times(
-            batch.samples, excluded_std_samples, method, profile
+            batch.samples,
+            excluded_std_samples,
+            method,
+            profile,
+            ambiguous_materials=ambiguous_runtime_materials,
         )
         dibk_target_retention_times = self._dibk_target_retention_times(
             batch.samples, excluded_std_samples, method, profile
         )
         if profile.use_runtime_std_rt:
+            for material in sorted(ambiguous_runtime_materials):
+                result.issues.append(
+                    ExcelPreviewIssue(
+                        ValidationSeverity.ERROR,
+                        "STD_TARGET_RT_AMBIGUOUS",
+                        f"선택된 STD 세트에서 {material} 기준 RT cluster가 둘 이상입니다.",
+                    )
+                )
             missing_runtime_materials = [
                 material
                 for material in profile.std_columns
                 if material not in runtime_target_retention_times
+                and material not in ambiguous_runtime_materials
                 and any(
                     sum(
                         peak.include_for_excel
@@ -1088,8 +1103,10 @@ class PreviewExcelExportService:
         excluded_sample_ids: set[UUID],
         method: StdMethod,
         profile: TemplateProfile,
+        *,
+        ambiguous_materials: set[str] | None = None,
     ) -> dict[str, Decimal]:
-        """Use selected-STD RTs; mixtures and Alcohol-2 use the set median."""
+        """Use selected-STD RTs; repeated-material noise is resolved by RT cluster."""
         if not profile.use_runtime_std_rt:
             return {}
         if profile in (LEGACY_PROFILE, ALCOHOL_PROFILE):
@@ -1103,18 +1120,40 @@ class PreviewExcelExportService:
             ]
             result: dict[str, Decimal] = {}
             for material in profile.std_columns:
-                observed = []
-                for sample in selected_standards:
-                    peaks = [
-                        peak
-                        for peak in sample.peaks
-                        if peak.include_for_excel
-                        and peak.material_standard == material
-                    ]
-                    if len(peaks) == 1:
-                        observed.append((peaks[0].retention_time, sample.sample_id))
-                if len(observed) == len(selected_standards) and observed:
-                    result[material] = cls._median_rt(observed)
+                observations = sorted(
+                    (peak.retention_time, sample.sample_id)
+                    for sample in selected_standards
+                    for peak in sample.peaks
+                    if peak.include_for_excel
+                    and peak.material_standard == material
+                )
+                if not observations:
+                    continue
+                clusters: list[list[tuple[Decimal, UUID]]] = []
+                for observation in observations:
+                    if (
+                        not clusters
+                        or observation[0] - clusters[-1][-1][0]
+                        > RUNTIME_STD_CLUSTER_TOLERANCE
+                    ):
+                        clusters.append([])
+                    clusters[-1].append(observation)
+                coverages = [
+                    len({sample_id for _rt, sample_id in cluster})
+                    for cluster in clusters
+                ]
+                highest_coverage = max(coverages)
+                winners = [
+                    cluster
+                    for cluster, coverage in zip(clusters, coverages)
+                    if coverage == highest_coverage
+                ]
+                if len(winners) > 1:
+                    if ambiguous_materials is not None:
+                        ambiguous_materials.add(material)
+                    continue
+                if highest_coverage == len(selected_standards):
+                    result[material] = cls._median_rt(winners[0])
             return result
         result: dict[str, Decimal] = {}
         for replicate_no in cls._std_replicates(profile, method):

@@ -4,17 +4,25 @@ from tempfile import TemporaryDirectory
 import os
 import re
 import unittest
+from unittest.mock import patch
+
+from PySide6.QtWidgets import QApplication, QFileDialog
 
 from honyu_app.application.preview_excel_export import PreviewExcelExportService
 from honyu_app.application.review_extraction import ReviewExtractionService
 from honyu_app.application.sample_number_matching import classify_sample_number
+from honyu_app.config.analysis_types import infer_analysis_type
 from honyu_app.domain.enums import ExcelPreviewStatus, ExcludeReason, SampleType, StdMethod
 from honyu_app.domain.models import ExcelCellWrite
 from honyu_app.infrastructure.database.mock_database_service import MockDatabaseService
 from honyu_app.infrastructure.excel.workbook_inspector import XlsxTemplateInspector
 from honyu_app.infrastructure.excel.workbook_validator import XlsxWorkbookValidator
 from honyu_app.infrastructure.excel.xml_cell_writer import XlsxXmlCellWriter
+from honyu_app.infrastructure.pdf.analysis_type_detector import (
+    detect_analysis_type_from_pdf_content,
+)
 from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
+from honyu_app.ui.pages.pdf_registration_page import PdfRegistrationPage
 
 
 def _actual_file(name: str) -> Path:
@@ -74,6 +82,39 @@ class Alcohol168213ActualRegressionTests(unittest.TestCase):
             analysis_type="(알콜2) IBA,1-BTOH",
             analysis_no_start=168,
             analysis_no_end=213,
+        )
+
+    def test_ambiguous_filename_auto_selects_alcohol_two_in_registration_ui(self) -> None:
+        self.assertIsNone(infer_analysis_type(ACTUAL_PDF.name))
+        self.assertEqual(
+            "(알콜2) IBA,1-BTOH",
+            detect_analysis_type_from_pdf_content(ACTUAL_PDF),
+        )
+        app = QApplication.instance() or QApplication([])
+        with TemporaryDirectory() as temporary:
+            database = MockDatabaseService(Path(temporary) / "ui.db")
+            page = PdfRegistrationPage(None, LabSolutionsParser(), database)
+            with patch.object(
+                QFileDialog, "getOpenFileName", return_value=(str(ACTUAL_PDF), "PDF")
+            ):
+                page.choose_pdf()
+            self.assertEqual("(알콜2) IBA,1-BTOH", page.analysis_type.currentText())
+            self.assertEqual(168, page.start_no.value())
+            self.assertEqual(213, page.end_no.value())
+            page.deleteLater()
+        app.processEvents()
+
+    def test_content_selected_type_is_stable_after_full_extraction(self) -> None:
+        materials = tuple(
+            peak.material_standard or peak.material_raw or ""
+            for sample in self.parsed.samples
+            for peak in sample.peaks
+        )
+        self.assertIn("IBA", materials)
+        self.assertIn("n-BTOH", materials)
+        self.assertEqual(
+            "(알콜2) IBA,1-BTOH",
+            infer_analysis_type(ACTUAL_PDF.name, materials=materials),
         )
 
     def test_pdf_db_preview_and_xlsx_match_all_18_confirmed_samples(self) -> None:

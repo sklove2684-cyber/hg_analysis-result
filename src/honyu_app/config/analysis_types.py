@@ -322,6 +322,20 @@ def material_aliases(
     return aliases
 
 
+def infer_alcohol_analysis_type(materials: tuple[str, ...]) -> str | None:
+    aliases = material_aliases()
+    canonical = {
+        aliases.get(normalize_material_alias_key(material), material.strip())
+        for material in materials
+        if material.strip()
+    }
+    if not {"IBA", "n-BTOH"}.issubset(canonical):
+        return None
+    if canonical.intersection({"IAA", "2-BTOH"}):
+        return "알콜4"
+    return "(알콜2) IBA,1-BTOH"
+
+
 validate_analysis_type_registry()
 
 
@@ -446,6 +460,9 @@ def infer_analysis_type(
     for display_name, tokens in rules:
         if any(token in filename_evidence for token in tokens):
             return display_name
+    alcohol_type = infer_alcohol_analysis_type(materials)
+    if alcohol_type is not None:
+        return alcohol_type
     if "iba" in auxiliary_evidence and any(
         token in auxiliary_evidence for token in ("1-btoh", "n-btoh")
     ):

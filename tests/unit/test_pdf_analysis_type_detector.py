@@ -16,6 +16,17 @@ def heavy_metal_table(elements: tuple[str, ...]) -> list[list[str]]:
     return [header, *rows]
 
 
+def gc_peak_table(materials: tuple[str, ...]) -> list[list[str]]:
+    header = [
+        "Peak#", "Ret. Time", "Area", "Height", "Conc.", "Unit", "Mark", "Name"
+    ]
+    rows = [
+        [str(index), f"{index}.100", "100", "50", "", "", "", material]
+        for index, material in enumerate(materials, 1)
+    ]
+    return [header, *rows, ["Total", "", "100", "", "", "", "", ""]]
+
+
 class PdfAnalysisTypeContentDetectorTests(unittest.TestCase):
     @staticmethod
     def _detect(*pages: tuple[str, list[list[str]]]) -> str | None:
@@ -64,6 +75,32 @@ class PdfAnalysisTypeContentDetectorTests(unittest.TestCase):
     def test_numeric_named_gc_peak_table_is_not_misclassified(self) -> None:
         text = "<Sample Information>\nSample Name: 123\nPeak# R.Time Area Height Name"
         self.assertIsNone(self._detect((text, [])))
+
+    def test_alcohol_two_is_detected_from_normalized_peak_materials(self) -> None:
+        self.assertEqual(
+            "(알콜2) IBA,1-BTOH",
+            self._detect((
+                "<Sample Information>", gc_peak_table(("IBA", "n-부탄올"))
+            )),
+        )
+
+    def test_alcohol_four_unique_material_has_priority(self) -> None:
+        for extra in ("IAA", "2-부탄올"):
+            with self.subTest(extra=extra):
+                self.assertEqual(
+                    "알콜4",
+                    self._detect((
+                        "<Sample Information>",
+                        gc_peak_table(("IBA", "1-BTOH", extra)),
+                    )),
+                )
+
+    def test_incomplete_alcohol_or_unrelated_gc_is_not_misclassified(self) -> None:
+        for materials in (("IBA",), ("n-BTOH",), ("IPA", "IAA")):
+            with self.subTest(materials=materials):
+                self.assertIsNone(self._detect((
+                    "<Sample Information>", gc_peak_table(materials)
+                )))
 
     def test_list_of_results_without_recovery_rows_is_not_enough(self) -> None:
         table = [[

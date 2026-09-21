@@ -32,6 +32,25 @@ class LabSolutionsParser:
     def __init__(self, normalizer: MaterialNormalizer | None = None) -> None:
         self._normalizer = normalizer or MaterialNormalizer()
 
+    def recognized_materials_from_tables(
+        self,
+        tables: list[list[list[str | None]]],
+        page_no: int,
+    ) -> tuple[str, ...]:
+        """Return canonical material names from one LabSolutions Peak Table page."""
+        try:
+            rows, _ = self._find_peak_table(
+                tables, page_no, allow_continuation=True
+            )
+        except ValidationError:
+            return ()
+        return tuple(dict.fromkeys(
+            canonical
+            for row in rows
+            if len(row) == 8
+            and (canonical := self._normalizer.normalize(row[7])) is not None
+        ))
+
     def parse(
         self,
         pdf_path: Path,

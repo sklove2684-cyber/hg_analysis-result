@@ -327,8 +327,28 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
             infer_analysis_type("알콜(2) 74-119.pdf"), "(알콜2) IBA,1-BTOH"
         )
         self.assertEqual(
+            infer_analysis_type("알콜2 168-213.pdf"), "(알콜2) IBA,1-BTOH"
+        )
+        self.assertEqual(
+            infer_analysis_type("IBA,1-BTOH 168-213.pdf"),
+            "(알콜2) IBA,1-BTOH",
+        )
+        self.assertEqual(
             infer_analysis_type("unknown.pdf", materials=("IBA", "1-BTOH")),
             "(알콜2) IBA,1-BTOH",
+        )
+        self.assertEqual(
+            infer_analysis_type(
+                "알콜 168-213.pdf",
+                materials=("IBA", "n-BTOH", "IAA", "2-BTOH"),
+            ),
+            "알콜4",
+        )
+        self.assertEqual(
+            infer_analysis_type(
+                "알콜 168-213.pdf", materials=("IBA", "n-부탄올", "IAA")
+            ),
+            "알콜4",
         )
         self.assertIsNone(infer_analysis_type("알콜 1-10.pdf"))
         self.assertEqual(infer_analysis_type("1컬럼혼유 120-130.pdf"), "1컬럼혼유")

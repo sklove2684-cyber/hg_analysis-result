@@ -11,6 +11,7 @@ from honyu_app.application.preview_excel_export import (
     BC_PROFILE,
     CELLOSOLVE_PROFILE,
     DIETHYL_ETHER_PROFILE,
+    DMF_DMA_PROFILE,
     ETHYLENE_GLYCOL_PROFILE,
     G2_PROFILE,
     G3_PROFILE,
@@ -34,6 +35,7 @@ from honyu_app.domain.enums import (
 )
 from honyu_app.domain.models import (
     AnalysisBatch,
+    ExcelPreviewResult,
     Peak,
     PeakCorrection,
     Sample,
@@ -94,10 +96,30 @@ def mek_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
         TemplateCell("LOD(area입력)", f"A{row}", True, f"262-{number}", "string")
         for row, number in enumerate(range(74, 120), start=21)
     )
+    headers = (
+        TemplateCell("LOD(area입력)", "E4", True, "Methyl ethyl ketone", "string"),
+        TemplateCell("LOD(area입력)", "F4", True, "area", "string"),
+    )
     return ExcelTemplateSnapshot(
         Path("mek-template.xlsx"),
         MEK_SHEETS,
-        {(cell.sheet, cell.address): cell for cell in (*defaults, *cells)},
+        {(cell.sheet, cell.address): cell for cell in (*defaults, *headers, *cells)},
+    )
+
+
+def dmf_dma_snapshot(
+    dmf_header: str,
+    dma_header: str,
+    *cells: TemplateCell,
+) -> ExcelTemplateSnapshot:
+    headers = (
+        TemplateCell("LOD(area입력)", "F3", True, dmf_header, "string"),
+        TemplateCell("LOD(area입력)", "I3", True, dma_header, "string"),
+    )
+    return ExcelTemplateSnapshot(
+        Path("dmf-dma-template.xlsx"),
+        MEK_SHEETS,
+        {(cell.sheet, cell.address): cell for cell in (*headers, *cells)},
     )
 
 
@@ -309,6 +331,49 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         return PreviewExcelExportService(
             self.database, FakeTemplateService(template or snapshot())
         )
+
+    def test_dmf_dma_template_accepts_confirmed_header_aliases(self) -> None:
+        aliases = (
+            ("DMF", "DMA"),
+            ("Dimethylformamide", "N,N-Dimethyl acetamide"),
+            ("N,N-Dimethylformamide", "N,N-Dimethylacetamide"),
+            ("  n,n-dimethyl formamide ", " n,n-dimethyl-acetamide "),
+        )
+        for dmf_header, dma_header in aliases:
+            with self.subTest(dmf=dmf_header, dma=dma_header):
+                result = ExcelPreviewResult(Path("template.xlsx"), StdMethod.A)
+                profile = PreviewExcelExportService._template_profile(
+                    dmf_dma_snapshot(dmf_header, dma_header), result
+                )
+                self.assertIs(profile, DMF_DMA_PROFILE)
+                self.assertEqual(result.issues, [])
+
+    def test_mek_template_requires_confirmed_material_and_area_headers(self) -> None:
+        result = ExcelPreviewResult(Path("template.xlsx"), StdMethod.A)
+        profile = PreviewExcelExportService._template_profile(
+            mek_snapshot(), result
+        )
+        self.assertIs(profile, MEK_PROFILE)
+        self.assertEqual(result.issues, [])
+
+    def test_unknown_lod_template_is_not_misclassified_as_mek(self) -> None:
+        unknown = ExcelTemplateSnapshot(
+            Path("unknown-template.xlsx"),
+            MEK_SHEETS,
+            {
+                ("LOD(area입력)", "E4"): TemplateCell(
+                    "LOD(area입력)", "E4", True, "Unknown material", "string"
+                ),
+                ("LOD(area입력)", "F4"): TemplateCell(
+                    "LOD(area입력)", "F4", True, "area", "string"
+                ),
+            },
+        )
+        result = ExcelPreviewResult(Path("template.xlsx"), StdMethod.A)
+        profile = PreviewExcelExportService._template_profile(unknown, result)
+
+        self.assertIsNone(profile)
+        self.assertEqual(result.issues[0].code, "TEMPLATE_PROFILE_UNSUPPORTED")
 
     def test_std_method_a_and_b_use_the_same_excel_std5_row(self) -> None:
         std5 = Sample(5, "STD5", "STD5", SampleType.STD, replicate_no=5, peaks=[peak(1, 500)])

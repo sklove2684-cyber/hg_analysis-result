@@ -68,6 +68,26 @@ LEGACY_RECOVERY_ROW_START = {
 DIBK_STD_CLUSTER_TOLERANCE = Decimal("0.080")
 RUNTIME_STD_CLUSTER_TOLERANCE = Decimal("0.080")
 
+DMF_TEMPLATE_HEADERS = {
+    "dmf",
+    "dimethylformamide",
+    "nndimethylformamide",
+}
+DMA_TEMPLATE_HEADERS = {
+    "dma",
+    "dimethylacetamide",
+    "nndimethylacetamide",
+}
+MEK_TEMPLATE_HEADERS = {
+    "mek",
+    "methylethylketone",
+}
+
+
+def _normalize_template_material_header(value: object | None) -> str:
+    """Normalize only separators used by known Excel material header aliases."""
+    return re.sub(r"[\s,._-]+", "", str(value or "").strip().casefold())
+
 
 def _column_number(name: str) -> int:
     value = 0
@@ -1288,6 +1308,16 @@ class PreviewExcelExportService:
                 .casefold()
                 for address in ("F3", "I3")
             )
+            normalized_lod_headers = tuple(
+                _normalize_template_material_header(header)
+                for header in lod_headers
+            )
+            mek_headers = tuple(
+                _normalize_template_material_header(
+                    snapshot.cell(MEK_PROFILE.area_sheet, address).value
+                )
+                for address in ("E4", "F4")
+            )
             ipa_headers = tuple(
                 str(snapshot.cell(MEK_PROFILE.area_sheet, address).value or "")
                 .strip()
@@ -1318,12 +1348,24 @@ class PreviewExcelExportService:
                 profile = ISOPROPYL_ACETATE_PROFILE
             elif alternate_header == "stoddard solvent":
                 profile = STODDARD_SOLVENT_PROFILE
-            elif lod_headers == ("dmf", "dma"):
+            elif (
+                normalized_lod_headers[0] in DMF_TEMPLATE_HEADERS
+                and normalized_lod_headers[1] in DMA_TEMPLATE_HEADERS
+            ):
                 profile = DMF_DMA_PROFILE
             elif lod_headers == ("isoamyl acetate", "n-propyl acetae"):
                 profile = ISOAMYL_N_PROPYL_ACETATE_PROFILE
-            else:
+            elif mek_headers[0] in MEK_TEMPLATE_HEADERS and mek_headers[1] == "area":
                 profile = MEK_PROFILE
+            else:
+                result.issues.append(
+                    ExcelPreviewIssue(
+                        ValidationSeverity.ERROR,
+                        "TEMPLATE_PROFILE_UNSUPPORTED",
+                        "LOD(area입력) 시트의 물질 헤더가 지원 대상이 아닙니다.",
+                    )
+                )
+                return None
         elif ONE_COLUMN_PROFILE.area_sheet in snapshot.sheet_names:
             headers = tuple(
                 str(snapshot.cell(ONE_COLUMN_PROFILE.area_sheet, address).value or "")

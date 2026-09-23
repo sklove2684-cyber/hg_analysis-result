@@ -317,6 +317,16 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
         self.assertEqual(infer_analysis_type("acetic acid 489-530.pdf"), "초산")
         self.assertEqual(infer_analysis_type("(IPA) 320-334.pdf"), "IPA")
         self.assertEqual(infer_analysis_type("IPA 320-334.pdf"), "IPA")
+        for filename in (
+            "DMF 335-336@완료.pdf",
+            "DMF 335-336.pdf",
+            "DMF_335-336.pdf",
+            "DMF-335-336.pdf",
+            "(DMF) 335-336.pdf",
+            "DMF,DMA 335-336.pdf",
+        ):
+            with self.subTest(filename=filename):
+                self.assertEqual(infer_analysis_type(filename), "DMF,DMA")
         self.assertEqual(
             infer_analysis_type("unknown.pdf", method_filenames=("IPA",)), "IPA"
         )
@@ -352,6 +362,19 @@ class AnalysisTypeRegistryTests(unittest.TestCase):
         )
         self.assertIsNone(infer_analysis_type("알콜 1-10.pdf"))
         self.assertEqual(infer_analysis_type("1컬럼혼유 120-130.pdf"), "1컬럼혼유")
+
+    def test_dmf_filename_token_does_not_match_inside_other_words(self) -> None:
+        for filename in ("ADMF 335-336.pdf", "DMF2 335-336.pdf", "mydmffile.pdf"):
+            with self.subTest(filename=filename):
+                self.assertIsNone(infer_analysis_type(filename))
+
+    def test_dmf_auxiliary_token_is_recognized(self) -> None:
+        self.assertEqual(
+            infer_analysis_type(
+                "unknown.pdf", method_filenames=("DMF(1).gcm",)
+            ),
+            "DMF,DMA",
+        )
 
     def test_ipa_token_detection_does_not_override_other_analysis_types(self) -> None:
         expected = {

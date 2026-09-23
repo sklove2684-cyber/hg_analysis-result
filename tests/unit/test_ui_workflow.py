@@ -497,6 +497,20 @@ class ReviewToExcelUiWorkflowTests(unittest.TestCase):
         registration._thread = None
         registration.deleteLater()
 
+    def test_dmf_pdf_selection_sets_type_and_range(self) -> None:
+        registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
+        pdf = Path(self.temp.name) / "DMF 335-336@완료.pdf"
+        pdf.touch()
+        with patch.object(QFileDialog, "getOpenFileName", return_value=(str(pdf), "PDF")):
+            registration.choose_pdf()
+
+        self.assertEqual(registration.analysis_type.currentText(), "DMF,DMA")
+        self.assertEqual(
+            (registration.start_no.value(), registration.end_no.value()),
+            (335, 336),
+        )
+        registration.deleteLater()
+
     def test_g3_parenthesized_filename_does_not_block_selected_g3_extraction(self) -> None:
         registration = PdfRegistrationPage(None, LabSolutionsParser(), self.database)
         pdf = Path(self.temp.name) / "혼유(G3-1,2디클로로에탄) 152-153@완료.pdf"

@@ -102,6 +102,30 @@ class PdfAnalysisTypeContentDetectorTests(unittest.TestCase):
                     "<Sample Information>", gc_peak_table(materials)
                 )))
 
+    def test_dmf_is_detected_from_method_filename(self) -> None:
+        self.assertEqual(
+            "DMF,DMA",
+            self._detect((
+                "Sample Name : BLANK\nMethod Filename : DMF(1).gcm",
+                gc_peak_table(()),
+            )),
+        )
+
+    def test_dmf_is_detected_from_std_peak_material(self) -> None:
+        self.assertEqual(
+            "DMF,DMA",
+            self._detect((
+                "Sample Name : STD1\nMethod Filename : unknown.gcm",
+                gc_peak_table(("DMF",)),
+            )),
+        )
+
+    def test_dmf_in_non_std_peak_table_alone_is_not_enough(self) -> None:
+        self.assertIsNone(self._detect((
+            "Sample Name : 335\nMethod Filename : unknown.gcm",
+            gc_peak_table(("DMF",)),
+        )))
+
     def test_list_of_results_without_recovery_rows_is_not_enough(self) -> None:
         table = [[
             "Sample Name", "Fe\nQuant\nAverage",

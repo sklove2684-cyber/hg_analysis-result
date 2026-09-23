@@ -10,6 +10,7 @@ from honyu_app.application.preview_excel_export import (
     MEK_PROFILE,
     PreviewExcelExportService,
 )
+from honyu_app.config.analysis_types import infer_analysis_type
 from honyu_app.domain.commands import SaveAnalysisBatchCommand
 from honyu_app.domain.enums import StdMethod
 from honyu_app.domain.models import ExcelPreviewResult
@@ -18,6 +19,9 @@ from honyu_app.infrastructure.excel.excel_recalculator import ExcelComRecalculat
 from honyu_app.infrastructure.excel.workbook_inspector import XlsxTemplateInspector
 from honyu_app.infrastructure.excel.workbook_validator import XlsxWorkbookValidator
 from honyu_app.infrastructure.excel.xml_cell_writer import XlsxXmlCellWriter
+from honyu_app.infrastructure.pdf.analysis_type_detector import (
+    detect_analysis_type_from_pdf_content,
+)
 from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
 
 
@@ -76,6 +80,12 @@ class DmfDma335336ActualRegressionTests(unittest.TestCase):
         profile = PreviewExcelExportService._template_profile(snapshot, result)
         self.assertIs(profile, DMF_DMA_PROFILE)
         self.assertEqual(result.issues, [])
+
+    def test_actual_pdf_auto_selects_dmf_dma(self) -> None:
+        self.assertEqual(infer_analysis_type(ACTUAL_PDF.name), "DMF,DMA")
+        self.assertEqual(
+            detect_analysis_type_from_pdf_content(ACTUAL_PDF), "DMF,DMA"
+        )
 
     def test_pdf_db_preview_and_final_xlsx(self) -> None:
         with TemporaryDirectory() as temporary:

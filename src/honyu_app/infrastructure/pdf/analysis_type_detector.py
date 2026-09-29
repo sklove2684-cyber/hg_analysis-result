@@ -17,6 +17,12 @@ from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
 
 MAX_CONTENT_SCAN_PAGES = 3
 
+ISOAMYL_N_PROPYL_ACETATE_MATERIALS = frozenset({
+    "n-프로필 아세테이트",
+    "이소아밀 아세테이트",
+})
+ISOPROPYL_ACETATE_MATERIAL = "Isopropyl acetate"
+
 
 def detect_analysis_type_from_pdf_content(pdf_path: Path) -> str | None:
     """Inspect a small PDF prefix for supported analysis-specific layouts."""
@@ -85,4 +91,9 @@ def detect_analysis_type_from_pdf_content(pdf_path: Path) -> str | None:
         return "DMF,DMA"
     if "DMF" in std_gc_materials:
         return "DMF,DMA"
+    std_materials = frozenset(std_gc_materials)
+    if ISOAMYL_N_PROPYL_ACETATE_MATERIALS.issubset(std_materials):
+        return "이소아밀,n-프로필 아세테이트"
+    if ISOPROPYL_ACETATE_MATERIAL in std_materials:
+        return "이소프로필 아세테이트"
     return infer_alcohol_analysis_type(tuple(gc_materials))

@@ -126,6 +126,73 @@ class PdfAnalysisTypeContentDetectorTests(unittest.TestCase):
             gc_peak_table(("DMF",)),
         )))
 
+    def test_isoamyl_n_propyl_acetate_is_detected_from_std_materials(self) -> None:
+        alias_pairs = (
+            ("프로필아세테이트", "이소아밀아세테이트"),
+            ("n-프로필 아세테이트", "초산이소아밀"),
+            ("propyl acetate", "isoamyl acetate"),
+        )
+        for materials in alias_pairs:
+            with self.subTest(materials=materials):
+                self.assertEqual(
+                    "이소아밀,n-프로필 아세테이트",
+                    self._detect((
+                        "Sample Name : STD1\nMethod Filename : unknown.gcm",
+                        gc_peak_table(materials),
+                    )),
+                )
+
+    def test_isoamyl_n_propyl_pair_has_priority_over_isopropyl_acetate(self) -> None:
+        self.assertEqual(
+            "이소아밀,n-프로필 아세테이트",
+            self._detect((
+                "Sample Name : STD1",
+                gc_peak_table((
+                    "n-propyl acetate",
+                    "isoamyl acetate",
+                    "isopropyl acetate",
+                )),
+            )),
+        )
+
+    def test_isopropyl_acetate_is_detected_from_std_material(self) -> None:
+        for material in (
+            "초산이소프로필",
+            "이소프로필 아세테이트",
+            "isopropyl acetate",
+        ):
+            with self.subTest(material=material):
+                self.assertEqual(
+                    "이소프로필 아세테이트",
+                    self._detect((
+                        "Sample Name : STD1",
+                        gc_peak_table((material,)),
+                    )),
+                )
+
+    def test_acetate_materials_outside_std_are_not_inferred(self) -> None:
+        for materials in (
+            ("n-propyl acetate", "isoamyl acetate"),
+            ("isopropyl acetate",),
+        ):
+            with self.subTest(materials=materials):
+                self.assertIsNone(self._detect((
+                    "Sample Name : 346",
+                    gc_peak_table(materials),
+                )))
+
+    def test_incomplete_or_unrelated_std_is_not_misclassified_as_acetate(self) -> None:
+        for materials in (
+            ("n-propyl acetate",),
+            ("isoamyl acetate",),
+            ("n-hexane", "acetone"),
+        ):
+            with self.subTest(materials=materials):
+                self.assertIsNone(self._detect((
+                    "Sample Name : STD1",
+                    gc_peak_table(materials),
+                )))
+
     def test_list_of_results_without_recovery_rows_is_not_enough(self) -> None:
         table = [[
             "Sample Name", "Fe\nQuant\nAverage",

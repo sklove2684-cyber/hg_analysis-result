@@ -11,7 +11,11 @@ def heavy_metal_table(elements: tuple[str, ...]) -> list[list[str]]:
     header = ["Sample Name", *(f"{element}\nQuant\nAverage" for element in elements)]
     rows = [
         [name, *(["0.1"] * len(elements))]
-        for name in ("회수율-B", "저1", "중1", "고1")
+        for name in (
+            "회수율-B", "저1", "중1", "고1",
+            "회수율-B", "저2", "중2", "고2",
+            "회수율-B", "저3", "중3", "고3",
+        )
     ]
     return [header, *rows]
 
@@ -200,15 +204,31 @@ class PdfAnalysisTypeContentDetectorTests(unittest.TestCase):
         ]]
         self.assertIsNone(self._detect(("List of Results", table)))
 
-    def test_fewer_than_three_element_columns_is_not_enough(self) -> None:
-        table = heavy_metal_table(("Fe", "Pb"))
-        self.assertIsNone(self._detect(("List of Results", table)))
+    def test_any_positive_element_count_is_supported_by_complete_structure(self) -> None:
+        for elements in (("Ag",), ("Fe", "Pb"), ("K", "Na")):
+            with self.subTest(elements=elements):
+                self.assertEqual(
+                    "중금속",
+                    self._detect(("List of Results", heavy_metal_table(elements))),
+                )
 
-    def test_na_k_two_element_heavy_metal_layout_is_detected(self) -> None:
-        self.assertEqual(
-            "중금속",
-            self._detect(("List of Results", heavy_metal_table(("K", "Na")))),
-        )
+    def test_incomplete_recovery_sequence_is_not_detected(self) -> None:
+        table = heavy_metal_table(("Ag",))
+        for removed_row in range(1, 13):
+            with self.subTest(removed_row=removed_row):
+                incomplete = [table[0], *(
+                    row for index, row in enumerate(table[1:], 1)
+                    if index != removed_row
+                )]
+                self.assertIsNone(self._detect(("List of Results", incomplete)))
+
+    def test_element_text_without_heavy_metal_table_is_not_detected(self) -> None:
+        self.assertIsNone(self._detect(("Ag Fe Na K", [])))
+
+    def test_complete_recovery_table_without_list_of_results_is_not_detected(self) -> None:
+        self.assertIsNone(self._detect((
+            "ordinary report", heavy_metal_table(("Ag",))
+        )))
 
 
 if __name__ == "__main__":

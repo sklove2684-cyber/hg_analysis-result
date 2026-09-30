@@ -17,6 +17,12 @@ from honyu_app.infrastructure.pdf.labsolutions_parser import LabSolutionsParser
 
 MAX_CONTENT_SCAN_PAGES = 3
 
+HEAVY_METAL_RECOVERY_SEQUENCE = (
+    "회수율-B", "저1", "중1", "고1",
+    "회수율-B", "저2", "중2", "고2",
+    "회수율-B", "저3", "중3", "고3",
+)
+
 ISOAMYL_N_PROPYL_ACETATE_MATERIALS = frozenset({
     "n-프로필 아세테이트",
     "이소아밀 아세테이트",
@@ -62,14 +68,10 @@ def detect_analysis_type_from_pdf_content(pdf_path: Path) -> str | None:
                     std_gc_materials.extend(page_materials)
                 for table in tables:
                     try:
-                        layout = find_heavy_metal_table_layout(table, min_elements=2)
+                        layout = find_heavy_metal_table_layout(table, min_elements=1)
                     except ValueError:
                         continue
-                    if layout is not None and (
-                        len(layout.element_columns) >= 3
-                        or {element for element, _ in layout.element_columns}
-                        == {"Na", "K"}
-                    ):
+                    if layout is not None:
                         layouts_and_tables.append((layout, table))
     except (OSError, ValueError, PDFSyntaxError):
         return None
@@ -77,16 +79,16 @@ def detect_analysis_type_from_pdf_content(pdf_path: Path) -> str | None:
     compact = " ".join(text.split())
     if re.search(r"\bList\s+of\s+Results\b", compact, re.IGNORECASE):
         for layout, table in layouts_and_tables:
-            sample_names = {
+            sample_names = [
                 (row[layout.sample_name_column] or "").strip()
                 for row in table[layout.header_row + 1:]
                 if len(row) > layout.sample_name_column
-            }
-            if (
-                "회수율-B" in sample_names
-                and any(re.fullmatch(r"저[123]", name) for name in sample_names)
-                and any(re.fullmatch(r"중[123]", name) for name in sample_names)
-                and any(re.fullmatch(r"고[123]", name) for name in sample_names)
+            ]
+            sequence_length = len(HEAVY_METAL_RECOVERY_SEQUENCE)
+            if any(
+                tuple(sample_names[start:start + sequence_length])
+                == HEAVY_METAL_RECOVERY_SEQUENCE
+                for start in range(len(sample_names) - sequence_length + 1)
             ):
                 return "중금속"
     if infer_analysis_type(

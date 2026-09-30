@@ -73,7 +73,67 @@ def dynamic_snapshot(blocks: tuple[tuple[str, str, int], ...]) -> ExcelTemplateS
     )
 
 
+def na_k_snapshot(sheet: str = "230106") -> ExcelTemplateSnapshot:
+    values = {
+        "D8": "주입량", "E8": "BLANK", "F8": "검출량",
+        "G8": "공시료 보정값", "H8": "평균", "I8": "회수율%",
+        "J8": "평균 회수율%", "B9": "NaOH", "C9": "저",
+        "C12": "중", "C15": "고", "B18": "KOH", "C18": "저",
+        "C21": "중", "C24": "고",
+    }
+    cells = [
+        TemplateCell(sheet, address, True, value, "string")
+        for address, value in values.items()
+    ]
+    for row in range(9, 27):
+        cells.extend((
+            TemplateCell(sheet, f"E{row}", True, None, "blank"),
+            TemplateCell(sheet, f"F{row}", True, None, "blank"),
+            TemplateCell(sheet, f"G{row}", True, None, "formula", "=F1-E1"),
+            TemplateCell(sheet, f"H{row}", True, None, "formula", "=AVERAGE(G1:G3)"),
+            TemplateCell(sheet, f"I{row}", True, None, "formula", "=H1/D1*100"),
+            TemplateCell(sheet, f"J{row}", True, None, "formula", "=AVERAGE(I1:I9)"),
+        ))
+    return ExcelTemplateSnapshot(
+        Path("na-k.xlsx"), ("상반기 틀", sheet, "intensity"),
+        {(cell.sheet, cell.address): cell for cell in cells},
+    )
+
+
 class HeavyMetalDynamicExcelTests(unittest.TestCase):
+    def test_na_k_profile_is_detected_by_structure_and_maps_only_24_input_cells(self) -> None:
+        result = PreviewExcelExportService._preview_heavy_metal(
+            batch_for(("Na", "K")), Path("na-k.xlsx"), na_k_snapshot()
+        )
+        self.assertTrue(result.can_generate, result.issues)
+        self.assertEqual(24, result.mapped_count)
+        targets = {(row.material, row.target_cell) for row in result.rows}
+        self.assertIn(("Na", "E9"), targets)
+        self.assertIn(("Na", "F17"), targets)
+        self.assertIn(("K", "E18"), targets)
+        self.assertIn(("K", "F26"), targets)
+        self.assertTrue(all(row.target_cell[0] in {"E", "F"} for row in result.rows))
+
+    def test_na_k_profile_does_not_depend_on_sheet_name(self) -> None:
+        result = PreviewExcelExportService._preview_heavy_metal(
+            batch_for(("Na", "K")), Path("renamed.xlsx"),
+            na_k_snapshot("회수율-날짜변경"),
+        )
+        self.assertTrue(result.can_generate, result.issues)
+        self.assertEqual(
+            {"회수율-날짜변경"}, {row.target_sheet for row in result.rows}
+        )
+
+    def test_na_k_profile_rejects_pdf_element_without_template_block(self) -> None:
+        result = PreviewExcelExportService._preview_heavy_metal(
+            batch_for(("Na", "K", "Pb")), Path("na-k.xlsx"), na_k_snapshot()
+        )
+        self.assertFalse(result.can_generate)
+        self.assertEqual(
+            "HEAVY_METAL_ELEMENT_NOT_IN_TEMPLATE", result.issues[0].code
+        )
+        self.assertIn("Pb", result.issues[0].message)
+
     def test_reordered_blocks_map_common_elements_and_leave_excel_only_untouched(self) -> None:
         pdf_elements = ("Fe", "Mn", "Al", "Cr", "Sn", "Ti", "Cu", "Zr", "Pb")
         blocks = (

@@ -204,6 +204,12 @@ class PdfAnalysisTypeContentDetectorTests(unittest.TestCase):
         table = heavy_metal_table(("Fe", "Pb"))
         self.assertIsNone(self._detect(("List of Results", table)))
 
+    def test_na_k_two_element_heavy_metal_layout_is_detected(self) -> None:
+        self.assertEqual(
+            "중금속",
+            self._detect(("List of Results", heavy_metal_table(("K", "Na")))),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

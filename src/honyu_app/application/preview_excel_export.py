@@ -916,6 +916,11 @@ class PreviewExcelExportService:
         batch: AnalysisBatch, template_path: Path, snapshot: ExcelTemplateSnapshot
     ) -> ExcelPreviewResult:
         result = ExcelPreviewResult(template_path, "N/A")
+        na_k_layout = PreviewExcelExportService._heavy_metal_na_k_layout(snapshot)
+        if na_k_layout is not None:
+            return PreviewExcelExportService._preview_heavy_metal_na_k(
+                batch, template_path, snapshot, na_k_layout
+            )
         required_sheets = ("LOD(고온물질)", "회수율", "분석결과")
         if not all(sheet in snapshot.sheet_names for sheet in required_sheets):
             result.issues.append(ExcelPreviewIssue(
@@ -1022,6 +1027,130 @@ class PreviewExcelExportService:
             result.issues.append(ExcelPreviewIssue(
                 ValidationSeverity.ERROR, "HEAVY_METAL_WRITE_COUNT_MISMATCH",
                 f"중금속 회수율 입력은 원소별 12개여야 합니다: "
+                f"원소 {len(pdf_elements)}개, 기대 {expected_count}개, "
+                f"실제 {len(result.rows)}개",
+            ))
+        return result
+
+    @staticmethod
+    def _heavy_metal_na_k_layout(
+        snapshot: ExcelTemplateSnapshot,
+    ) -> tuple[str, dict[str, int], str, str] | None:
+        required_labels = {
+            "NaOH", "KOH", "주입량", "BLANK", "검출량", "공시료보정값",
+            "평균", "회수율%", "평균회수율%",
+        }
+        for sheet in snapshot.sheet_names:
+            labels: dict[str, list[str]] = {}
+            for (cell_sheet, address), cell in snapshot.cells.items():
+                if cell_sheet != sheet or not isinstance(cell.value, str):
+                    continue
+                label = re.sub(r"\s+", "", cell.value).strip()
+                labels.setdefault(label, []).append(address)
+            if not required_labels.issubset(labels):
+                continue
+            header_pair = next((
+                (blank_address, recovery_address)
+                for blank_address in labels["BLANK"]
+                for recovery_address in labels["검출량"]
+                if _cell_position(blank_address)[1]
+                == _cell_position(recovery_address)[1]
+            ), None)
+            if header_pair is None:
+                continue
+            blank_column_number, _ = _cell_position(header_pair[0])
+            recovery_column_number, _ = _cell_position(header_pair[1])
+            blocks: dict[str, int] = {}
+            valid = True
+            for element, excel_label in (("Na", "NaOH"), ("K", "KOH")):
+                if len(labels[excel_label]) != 1:
+                    valid = False
+                    break
+                label_column, base_row = _cell_position(labels[excel_label][0])
+                level_column = _column_name(label_column + 1)
+                expected_levels = (
+                    (base_row, "저"),
+                    (base_row + 3, "중"),
+                    (base_row + 6, "고"),
+                )
+                if any(
+                    re.sub(
+                        r"\s+", "",
+                        str(snapshot.cell(sheet, f"{level_column}{row}").value or ""),
+                    ) != level
+                    for row, level in expected_levels
+                ):
+                    valid = False
+                    break
+                blocks[element] = base_row
+            if valid:
+                return (
+                    sheet,
+                    blocks,
+                    _column_name(blank_column_number),
+                    _column_name(recovery_column_number),
+                )
+        return None
+
+    @staticmethod
+    def _preview_heavy_metal_na_k(
+        batch: AnalysisBatch,
+        template_path: Path,
+        snapshot: ExcelTemplateSnapshot,
+        layout: tuple[str, dict[str, int], str, str],
+    ) -> ExcelPreviewResult:
+        result = ExcelPreviewResult(template_path, "N/A")
+        sheet, blocks, blank_column, recovery_column = layout
+        pdf_elements = tuple(dict.fromkeys(
+            item.element for item in batch.heavy_metal_recovery_values
+        ))
+        unsupported = [element for element in pdf_elements if element not in blocks]
+        if unsupported:
+            result.issues.append(ExcelPreviewIssue(
+                ValidationSeverity.ERROR,
+                "HEAVY_METAL_ELEMENT_NOT_IN_TEMPLATE",
+                "PDF 원소에 대응하는 Na/K 회수율 Excel 블록이 없습니다: "
+                + ", ".join(unsupported),
+            ))
+            return result
+        offsets = {"blank": 0, "low": 0, "mid": 3, "high": 6}
+        for item in batch.heavy_metal_recovery_values:
+            base_row = blocks[item.element]
+            column = blank_column if item.level == "blank" else recovery_column
+            row = base_row + offsets[item.level] + item.replicate_no - 1
+            address = f"{column}{row}"
+            cell = snapshot.cell(sheet, address)
+            if cell.has_formula:
+                result.issues.append(ExcelPreviewIssue(
+                    ValidationSeverity.ERROR,
+                    "TARGET_CELL_HAS_FORMULA",
+                    f"수식 셀에는 입력할 수 없습니다: {sheet}!{address}",
+                    item.sample_name, sheet, address,
+                ))
+                continue
+            result.rows.append(ExcelPreviewRow(
+                sample_name=item.sample_name,
+                sample_type=(
+                    SampleType.RECOVERY_BLANK
+                    if item.level == "blank" else SampleType.RECOVERY
+                ),
+                material=item.element,
+                peak_no=item.replicate_no,
+                retention_time=Decimal("0"),
+                area_raw=item.value,
+                applied_area=item.value,
+                target_sheet=sheet,
+                target_cell=address,
+                existing_value_type=cell.value_type,
+                existing_has_formula=cell.has_formula,
+                message="L" if item.below_limit else None,
+            ))
+        expected_count = len(pdf_elements) * 12
+        if len(result.rows) != expected_count:
+            result.issues.append(ExcelPreviewIssue(
+                ValidationSeverity.ERROR,
+                "HEAVY_METAL_WRITE_COUNT_MISMATCH",
+                f"Na/K 중금속 회수율 입력은 원소별 12개여야 합니다: "
                 f"원소 {len(pdf_elements)}개, 기대 {expected_count}개, "
                 f"실제 {len(result.rows)}개",
             ))

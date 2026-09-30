@@ -62,10 +62,14 @@ def detect_analysis_type_from_pdf_content(pdf_path: Path) -> str | None:
                     std_gc_materials.extend(page_materials)
                 for table in tables:
                     try:
-                        layout = find_heavy_metal_table_layout(table, min_elements=3)
+                        layout = find_heavy_metal_table_layout(table, min_elements=2)
                     except ValueError:
                         continue
-                    if layout is not None:
+                    if layout is not None and (
+                        len(layout.element_columns) >= 3
+                        or {element for element, _ in layout.element_columns}
+                        == {"Na", "K"}
+                    ):
                         layouts_and_tables.append((layout, table))
     except (OSError, ValueError, PDFSyntaxError):
         return None

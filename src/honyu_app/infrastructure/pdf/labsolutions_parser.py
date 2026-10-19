@@ -9,6 +9,8 @@ from collections.abc import Callable
 
 import pdfplumber
 
+from honyu_app.infrastructure.pdf.sample_names import is_recovery_blank
+
 from honyu_app.domain.enums import (
     ConcentrationLevel,
     ExcludeReason,
@@ -481,7 +483,7 @@ class LabSolutionsParser:
         std = re.fullmatch(r"STD([1-6])", name, re.IGNORECASE)
         if std:
             return SampleType.STD, None, int(std.group(1)), None, False
-        if name.endswith("B"):
+        if is_recovery_blank(raw_name) or name.endswith("B"):
             return SampleType.RECOVERY_BLANK, None, None, None, True
         recovery = re.fullmatch(r"(저|중|고)(\d+)", name)
         if recovery:

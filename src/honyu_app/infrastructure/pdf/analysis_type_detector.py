@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 
 import pdfplumber
+
+from honyu_app.infrastructure.pdf.sample_names import canonical_recovery_sample_name
 from pdfminer.pdfparser import PDFSyntaxError
 
 from honyu_app.config.analysis_types import (
@@ -80,7 +82,9 @@ def detect_analysis_type_from_pdf_content(pdf_path: Path) -> str | None:
     if re.search(r"\bList\s+of\s+Results\b", compact, re.IGNORECASE):
         for layout, table in layouts_and_tables:
             sample_names = [
-                (row[layout.sample_name_column] or "").strip()
+                canonical_recovery_sample_name(
+                    (row[layout.sample_name_column] or "").strip()
+                )
                 for row in table[layout.header_row + 1:]
                 if len(row) > layout.sample_name_column
             ]

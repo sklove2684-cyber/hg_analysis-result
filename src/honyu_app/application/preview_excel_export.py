@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 import re
+import logging
 from uuid import UUID
 
 from honyu_app.config.analysis_types import excel_profile_key_for, has_excel_profile
@@ -883,6 +884,8 @@ class PreviewExcelExportService:
             else None
         )
 
+        recovery_rep_map = self._recovery_replicate_map(batch.samples, result)
+
         for sample in batch.samples:
             if sample.sample_id in excluded_std_samples:
                 for peak in sample.peaks:
@@ -907,6 +910,7 @@ class PreviewExcelExportService:
                 dibk_target_retention_times,
                 result,
                 stoddard_cs2_rt=stoddard_cs2_rt,
+                recovery_rep_map=recovery_rep_map,
             )
         self._detect_target_collisions(result)
         return result
@@ -1799,6 +1803,7 @@ class PreviewExcelExportService:
         result: ExcelPreviewResult,
         *,
         stoddard_cs2_rt: Decimal | None = None,
+        recovery_rep_map: dict[int, int],
     ) -> None:
         number_decision = self._sample_number_decision(sample, profile)
         # A sample containing only unnamed/excluded peaks has nothing that can
@@ -1859,7 +1864,7 @@ class PreviewExcelExportService:
             return
 
         row = self._sample_target_row(
-            sample, method, profile, worker_rows, result, number_decision
+            sample, method, profile, worker_rows, result, number_decision, recovery_rep_map
         )
         if row is None:
             reason = self._sample_exclusion_reason(sample, method, profile)
@@ -2088,6 +2093,48 @@ class PreviewExcelExportService:
                 )
             )
 
+    @staticmethod
+    def _recovery_replicate_map(
+        samples: list[Sample], result: ExcelPreviewResult
+    ) -> dict[int, int]:
+        """Map complete recovery sets to Excel slots without changing raw IDs."""
+        sets: dict[int, list[Sample]] = {}
+        invalid = False
+        for sample in samples:
+            if sample.sample_type is not SampleType.RECOVERY:
+                continue
+            source_id = sample.replicate_no
+            if not isinstance(source_id, int) or source_id <= 0:
+                result.issues.append(ExcelPreviewIssue(
+                    ValidationSeverity.ERROR, "RECOVERY_REPLICATE_INVALID",
+                    "회수율 반복번호는 양의 정수여야 합니다.", sample_name=sample.sample_name_raw,
+                ))
+                invalid = True
+                continue
+            sets.setdefault(source_id, []).append(sample)
+        if not sets:
+            return {}
+        if len(sets) != 3:
+            result.issues.append(ExcelPreviewIssue(
+                ValidationSeverity.ERROR, "RECOVERY_SET_COUNT_MISMATCH",
+                f"Excel 양식은 회수율 3세트를 요구하지만 PDF에서 {len(sets)}세트를 확인했습니다.",
+            ))
+            invalid = True
+        expected = {ConcentrationLevel.LOW, ConcentrationLevel.MID, ConcentrationLevel.HIGH}
+        for source_id, members in sets.items():
+            levels = [sample.concentration_level for sample in members]
+            if len(levels) != 3 or set(levels) != expected:
+                result.issues.append(ExcelPreviewIssue(
+                    ValidationSeverity.ERROR, "RECOVERY_SET_INCOMPLETE",
+                    f"회수율 반복번호 {source_id}의 저/중/고 세트가 완전하지 않습니다.",
+                ))
+                invalid = True
+        if invalid:
+            return {}
+        mapping = {source_id: index for index, source_id in enumerate(sets, 1)}
+        logging.getLogger(__name__).info("Recovery source-to-logical mapping: %s", mapping)
+        return mapping
+
     def _sample_target_row(
         self,
         sample: Sample,
@@ -2096,6 +2143,7 @@ class PreviewExcelExportService:
         worker_rows: dict[str, list[int]],
         result: ExcelPreviewResult,
         number_decision: SampleNumberDecision,
+        recovery_rep_map: dict[int, int],
     ) -> int | None:
         if sample.sample_type is SampleType.STD:
             selected = self._std_replicates(profile, method)
@@ -2108,14 +2156,12 @@ class PreviewExcelExportService:
                     result, sample, "RECOVERY_LEVEL_MISSING", "회수율 농도 구분이 없습니다."
                 )
                 return None
-            if sample.replicate_no not in {1, 2, 3}:
-                self._sample_error(
-                    result, sample, "RECOVERY_REPLICATE_INVALID", "회수율 반복번호는 1~3이어야 합니다."
-                )
+            logical_replicate = recovery_rep_map.get(sample.replicate_no)
+            if logical_replicate is None:
                 return None
             return (
                 profile.recovery_row_start[sample.concentration_level]
-                + sample.replicate_no
+                + logical_replicate
                 - 1
             )
         key = number_decision.analysis_number

@@ -308,6 +308,23 @@ def peak(number: int, area: int, material: str = "n-hexane") -> Peak:
 
 
 def batch(samples: list[Sample], analysis_type: str = "혼유") -> AnalysisBatch:
+    # Cell-mapping fixtures must now include the complete 3-set recovery layout.
+    recoveries = [s for s in samples if s.sample_type is SampleType.RECOVERY]
+    if recoveries and len(recoveries) < 9:
+        complete = []
+        for replicate in (1, 2, 3):
+            for label, level in (("저", ConcentrationLevel.LOW),
+                                 ("중", ConcentrationLevel.MID),
+                                 ("고", ConcentrationLevel.HIGH)):
+                existing = [s for s in recoveries if s.replicate_no == replicate
+                            and s.concentration_level is level]
+                complete.extend(existing or [Sample(
+                    1, f"{label}{replicate}", f"{label}{replicate}", SampleType.RECOVERY,
+                    concentration_level=level, replicate_no=replicate,
+                )])
+        first = next(i for i, s in enumerate(samples) if s.sample_type is SampleType.RECOVERY)
+        samples = (samples[:first] + complete
+                   + [s for s in samples[first:] if s.sample_type is not SampleType.RECOVERY])
     return AnalysisBatch(
         batch_code="BATCH-PREVIEW",
         source_file=SourceFile("sample.pdf", Path("sample.pdf"), "a" * 64, 100, 1),

@@ -57,6 +57,16 @@ class HeavyMetalDynamicParserTests(unittest.TestCase):
                     value.element for value in batch.heavy_metal_recovery_values
                 })
 
+    def test_recovery_blank_name_variants(self) -> None:
+        for name in ('회수율-B', '회수율B', '회수율 B', '회수율-BLANK', '회수율-blank', '회수율 BLANK', '회수율_blank'):
+            with self.subTest(name=name):
+                table = results_table(("Fe",))
+                for index in (1, 5, 9):
+                    table[index][0] = name
+                batch = self._parse(table)
+                blanks = [v for v in batch.heavy_metal_recovery_values if v.level == "blank"]
+                self.assertEqual([1, 2, 3], [v.replicate_no for v in blanks])
+
     def test_reordered_elements_are_preserved_by_symbol(self) -> None:
         elements = ("Pb", "Fe", "Zr", "Mn", "Cu", "Al", "Ti", "Sn", "Cr")
         batch = self._parse(results_table(elements))

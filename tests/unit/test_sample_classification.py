@@ -41,6 +41,13 @@ class SampleClassificationTests(unittest.TestCase):
         self.assertEqual(sample_type, SampleType.RECOVERY_BLANK)
         self.assertTrue(is_blank)
 
+    def test_recovery_blank_name_variants(self) -> None:
+        for name in ('회수율-B', '회수율B', '회수율 B', '회수율-BLANK', '회수율-blank', '회수율 BLANK', '회수율_blank'):
+            with self.subTest(name=name):
+                result = self.parser._classify_sample(name)
+                self.assertEqual(result[0], SampleType.RECOVERY_BLANK)
+                self.assertTrue(result[4])
+
     def test_total_only_table_is_accepted_only_as_a_continuation(self) -> None:
         total_only = [
             [["Total", None, "5394472", "1348209", None, None, None, None]]

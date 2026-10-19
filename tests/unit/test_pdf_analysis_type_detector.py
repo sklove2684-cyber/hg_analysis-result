@@ -50,6 +50,14 @@ class PdfAnalysisTypeContentDetectorTests(unittest.TestCase):
         ):
             return detect_analysis_type_from_pdf_content(Path("123-150.pdf"))
 
+    def test_recovery_blank_name_variants(self) -> None:
+        for name in ('회수율-B', '회수율B', '회수율 B', '회수율-BLANK', '회수율-blank', '회수율 BLANK', '회수율_blank'):
+            with self.subTest(name=name):
+                table = heavy_metal_table(("Fe",))
+                for index in (1, 5, 9):
+                    table[index][0] = name
+                self.assertEqual("중금속", self._detect(("List of Results", table)))
+
     def test_dynamic_nine_element_layout_is_detected(self) -> None:
         elements = ("Fe", "Mn", "Al", "Cr", "Sn", "Ti", "Cu", "Zr", "Pb")
         self.assertEqual(

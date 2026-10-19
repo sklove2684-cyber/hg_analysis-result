@@ -880,7 +880,7 @@ class LabSolutionsContinuationPageRegressionTests(unittest.TestCase):
         self.assertTrue(all(peak.include_for_excel for peak in registered))
 
     @unittest.skipUnless(ALCOHOL_XLSX.is_file(), f"알콜 Excel 양식 없음: {ALCOHOL_XLSX}")
-    def test_alcohol_batch_maps_to_its_template_by_closest_retention_time(self) -> None:
+    def test_incomplete_alcohol_recovery_blocks_export_but_preserves_worker_rt_mapping(self) -> None:
         batch = deepcopy(self.batch)
         with TemporaryDirectory() as temp:
             database = MockDatabaseService(Path(temp) / "alcohol.db")
@@ -896,8 +896,11 @@ class LabSolutionsContinuationPageRegressionTests(unittest.TestCase):
             if row.status is ExcelPreviewStatus.MAPPED
         ]
         sample_90 = [row for row in mapped if row.sample_name.startswith("90-")]
-        self.assertTrue(preview.can_generate, preview.issues)
-        self.assertEqual((preview.mapped_count, preview.excluded_count, preview.error_count), (70, 509, 0))
+        # This actual PDF contains 중3/고3 but no 저3. Never fill that slot silently.
+        self.assertFalse(preview.can_generate)
+        self.assertEqual([issue.code for issue in preview.issues], ["RECOVERY_SET_INCOMPLETE"])
+        self.assertEqual((preview.mapped_count, preview.excluded_count, preview.error_count), (54, 485, 1))
+        self.assertFalse(any(row.target_sheet == "회수율" for row in mapped))
         self.assertFalse(
             any(issue.code == "UNSUPPORTED_MATERIAL" for issue in preview.issues)
         )

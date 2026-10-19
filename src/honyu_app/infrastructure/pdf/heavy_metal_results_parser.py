@@ -10,6 +10,8 @@ import re
 
 import pdfplumber
 
+from honyu_app.infrastructure.pdf.sample_names import is_recovery_blank
+
 from honyu_app.domain.enums import ReviewStatus
 from honyu_app.domain.errors import ExtractionCancelledError, ValidationError
 from honyu_app.domain.models import AnalysisBatch, HeavyMetalRecoveryValue, SourceFile
@@ -72,7 +74,7 @@ class HeavyMetalResultsParser:
                         if len(row) <= max_column:
                             continue
                         sample_name = (row[layout.sample_name_column] or "").strip()
-                        if sample_name == "회수율-B":
+                        if is_recovery_blank(sample_name):
                             blank_no += 1
                             level, replicate = "blank", blank_no
                         else:

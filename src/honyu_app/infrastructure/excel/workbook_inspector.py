@@ -87,12 +87,17 @@ class XlsxTemplateInspector:
                 workbook_rels = _relationships(archive, workbook_path)
                 sheet_names: list[str] = []
                 cells: dict[tuple[str, str], TemplateCell] = {}
+                merged_ranges: list[tuple[str, str]] = []
                 for sheet_node in workbook.findall("m:sheets/m:sheet", NS):
                     sheet_name = sheet_node.attrib["name"]
                     sheet_names.append(sheet_name)
                     relation_id = sheet_node.attrib[f"{{{REL}}}id"]
                     sheet_path = workbook_rels[relation_id]
                     root = ET.fromstring(archive.read(sheet_path))
+                    merged_ranges.extend(
+                        (sheet_name, node.attrib["ref"])
+                        for node in root.findall("m:mergeCells/m:mergeCell", NS)
+                    )
                     for node in root.findall(".//m:c", NS):
                         address = node.attrib["r"]
                         formula_node = node.find("m:f", NS)
@@ -109,6 +114,11 @@ class XlsxTemplateInspector:
                             formula=formula,
                             style_id=int(node.attrib.get("s", 0)),
                         )
-                return ExcelTemplateSnapshot(path, tuple(sheet_names), cells)
+                view = workbook.find("m:bookViews/m:workbookView", NS)
+                active = int(view.attrib.get("activeTab", "0")) if view is not None else 0
+                active_sheet = sheet_names[active] if 0 <= active < len(sheet_names) else None
+                return ExcelTemplateSnapshot(
+                    path, tuple(sheet_names), cells, active_sheet, tuple(merged_ranges)
+                )
         except (OSError, KeyError, ET.ParseError, zipfile.BadZipFile) as exc:
             raise ValidationError(f"Excel 템플릿 구조를 읽을 수 없습니다: {path}") from exc

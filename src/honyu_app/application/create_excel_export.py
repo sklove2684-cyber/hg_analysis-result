@@ -72,7 +72,11 @@ class CreateExcelExportService:
         work_directory = excel_work_dir()
         work_directory.mkdir(parents=True, exist_ok=True)
         partial = work_directory / f"honyu_export_{uuid4().hex}.xlsx"
-        self._writer.write_copy(template, partial, writes)
+        recovery_only = preview.std_method == "N/A"
+        if recovery_only:
+            self._writer.write_copy(template, partial, writes, preserve_workbook=True)
+        else:
+            self._writer.write_copy(template, partial, writes)
         recalculated = False
         try:
             before = self._validator.validate(
@@ -85,7 +89,7 @@ class CreateExcelExportService:
                     f"점검용 파일: {failed}\n" + "\n".join(before.errors[:10])
                 )
 
-            if self._recalculate_with_excel:
+            if self._recalculate_with_excel and not recovery_only:
                 try:
                     self._recalculator.recalculate(partial)
                     recalculated = True

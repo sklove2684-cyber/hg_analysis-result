@@ -25,6 +25,8 @@ class ExcelTemplateSnapshot:
     path: Path
     sheet_names: tuple[str, ...]
     cells: dict[tuple[str, str], TemplateCell] = field(default_factory=dict)
+    active_sheet: str | None = None
+    merged_ranges: tuple[tuple[str, str], ...] = ()
 
     def cell(self, sheet: str, address: str) -> TemplateCell:
         return self.cells.get(

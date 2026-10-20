@@ -10,6 +10,8 @@ class ExcelCellWriter(Protocol):
         template_path: Path,
         output_path: Path,
         writes: list[ExcelCellWrite],
+        *,
+        preserve_workbook: bool = False,
     ) -> None: ...
 
 

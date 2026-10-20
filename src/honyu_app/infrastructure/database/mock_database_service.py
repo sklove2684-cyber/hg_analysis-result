@@ -76,6 +76,24 @@ class MockDatabaseService:
         try:
             with self._connect() as connection:
                 connection.executescript(schema)
+                recovery_columns = {
+                    row["name"] for row in connection.execute(
+                        "PRAGMA table_info(heavy_metal_recovery_values)"
+                    )
+                }
+                if "group_no" not in recovery_columns:
+                    connection.execute("BEGIN IMMEDIATE")
+                    connection.execute(
+                        "ALTER TABLE heavy_metal_recovery_values RENAME TO heavy_metal_recovery_values_old"
+                    )
+                    table_sql = schema[schema.index("CREATE TABLE IF NOT EXISTS heavy_metal_recovery_values"):]
+                    connection.execute(table_sql[:table_sql.index(";") + 1])
+                    columns = ", ".join(recovery_columns)
+                    connection.execute(
+                        f"INSERT INTO heavy_metal_recovery_values ({columns}) "
+                        f"SELECT {columns} FROM heavy_metal_recovery_values_old"
+                    )
+                    connection.execute("DROP TABLE heavy_metal_recovery_values_old")
                 sample_columns = {
                     row["name"]
                     for row in connection.execute("PRAGMA table_info(samples)")
@@ -299,11 +317,11 @@ class MockDatabaseService:
             connection.execute(
                 """INSERT INTO heavy_metal_recovery_values (
                     recovery_value_id, batch_id, element, sample_name, level,
-                    replicate_no, value, below_limit, source_page, source_row, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    replicate_no, value, below_limit, source_page, source_row, group_no, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (str(uuid4()), str(batch_id), item.element, item.sample_name, item.level,
                  item.replicate_no, str(item.value), int(item.below_limit),
-                 item.source_page, item.source_row, now),
+                 item.source_page, item.source_row, item.group_no or 0, now),
             )
 
     def search_batches(self, query: BatchSearchQuery) -> list[BatchSummary]:
@@ -407,6 +425,7 @@ class MockDatabaseService:
                 level=row["level"], replicate_no=row["replicate_no"],
                 value=Decimal(row["value"]), below_limit=bool(row["below_limit"]),
                 source_page=row["source_page"], source_row=row["source_row"],
+                group_no=row["group_no"] or None,
             ) for row in heavy_rows]
         source = SourceFile(
             original_name=batch_row["original_name"],

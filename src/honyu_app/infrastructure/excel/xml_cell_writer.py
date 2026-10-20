@@ -76,6 +76,8 @@ class XlsxXmlCellWriter:
         template_path: Path,
         output_path: Path,
         writes: list[ExcelCellWrite],
+        *,
+        preserve_workbook: bool = False,
     ) -> None:
         template_path = Path(template_path)
         output_path = Path(output_path)
@@ -110,7 +112,8 @@ class XlsxXmlCellWriter:
                 if part is None:
                     raise ExcelExportError(f"Excel 시트가 없습니다: {sheet}")
                 parts[part] = self._write_sheet(parts[part], sheet, sheet_writes)
-            parts["xl/workbook.xml"] = self._set_calculation_mode(parts["xl/workbook.xml"])
+            if not preserve_workbook:
+                parts["xl/workbook.xml"] = self._set_calculation_mode(parts["xl/workbook.xml"])
 
             with ZipFile(output_path, "x", compression=ZIP_DEFLATED) as target:
                 for name, data in parts.items():

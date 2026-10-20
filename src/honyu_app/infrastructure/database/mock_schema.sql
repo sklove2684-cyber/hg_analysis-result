@@ -81,8 +81,9 @@ CREATE TABLE IF NOT EXISTS heavy_metal_recovery_values (
     below_limit INTEGER NOT NULL DEFAULT 0 CHECK (below_limit IN (0, 1)),
     source_page INTEGER NOT NULL,
     source_row INTEGER,
+    group_no INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    UNIQUE (batch_id, element, level, replicate_no)
+    UNIQUE (batch_id, element, group_no, level, replicate_no)
 );
 
 CREATE TABLE IF NOT EXISTS peak_corrections (

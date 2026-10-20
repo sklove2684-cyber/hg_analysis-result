@@ -36,7 +36,7 @@ class HeavyMetalResultsParser:
             raise ValidationError(f"PDF 파일을 찾을 수 없습니다: {path}")
         raw = path.read_bytes()
         values: list[HeavyMetalRecoveryValue] = []
-        blank_no = 0
+        blank_counts: Counter[int | None] = Counter()
         pdf_elements: tuple[str, ...] | None = None
         with pdfplumber.open(path) as pdf:
             page_count = len(pdf.pages)
@@ -65,6 +65,7 @@ class HeavyMetalResultsParser:
                         )
                     max_column = max(
                         layout.sample_name_column,
+                        layout.group_column if layout.group_column is not None else 0,
                         *(column for _, column in layout.element_columns),
                     )
                     data_rows = table[layout.header_row + 1:]
@@ -74,9 +75,17 @@ class HeavyMetalResultsParser:
                         if len(row) <= max_column:
                             continue
                         sample_name = (row[layout.sample_name_column] or "").strip()
+                        group_no = None
+                        if layout.group_column is not None:
+                            raw_group = str(row[layout.group_column] or "").strip()
+                            if not re.fullmatch(r"[1-9][0-9]*", raw_group):
+                                if is_recovery_blank(sample_name) or re.fullmatch(r"[저중고][123]", sample_name):
+                                    raise ValidationError("PDF_LAYOUT_MISMATCH: 회수율 G#가 양의 정수가 아닙니다.")
+                                continue
+                            group_no = int(raw_group)
                         if is_recovery_blank(sample_name):
-                            blank_no += 1
-                            level, replicate = "blank", blank_no
+                            blank_counts[group_no] += 1
+                            level, replicate = "blank", blank_counts[group_no]
                         else:
                             match = re.fullmatch(r"([저중고])([123])", sample_name)
                             if not match:
@@ -88,7 +97,7 @@ class HeavyMetalResultsParser:
                             value, below_limit = self._quant_value(row[col], page_no, source_row)
                             values.append(HeavyMetalRecoveryValue(
                                 element, sample_name, level, replicate, value,
-                                below_limit, page_no, source_row,
+                                below_limit, page_no, source_row, group_no,
                             ))
                 if progress_callback:
                     progress_callback(page_no, page_count)
@@ -96,18 +105,19 @@ class HeavyMetalResultsParser:
             raise ValidationError(
                 "PDF_LAYOUT_MISMATCH: Quant Average 원소 헤더를 확인할 수 없습니다."
             )
-        keys = [(v.element, v.level, v.replicate_no) for v in values]
+        keys = [(v.element, v.group_no, v.level, v.replicate_no) for v in values]
         counts = Counter(keys)
         expected_keys = {
-            (element, level, replicate)
+            (element, group_no, level, replicate)
             for element in pdf_elements
+            for group_no in dict.fromkeys(v.group_no for v in values)
             for level in ("blank", "low", "mid", "high")
             for replicate in (1, 2, 3)
         }
         missing = expected_keys - counts.keys()
         duplicates = [key for key, count in counts.items() if count != 1]
-        expected_count = len(pdf_elements) * 12
-        if len(values) != expected_count or missing or duplicates:
+        expected_count = len(expected_keys)
+        if not values or len(values) != expected_count or missing or duplicates:
             raise ValidationError(
                 "PDF_LAYOUT_MISMATCH: 회수율 값은 원소별 12개여야 합니다 "
                 f"(원소 {len(pdf_elements)}개, 기대 {expected_count}개, "

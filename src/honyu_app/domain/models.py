@@ -77,6 +77,7 @@ class HeavyMetalRecoveryValue:
     below_limit: bool = False
     source_page: int = 0
     source_row: int | None = None
+    group_no: int | None = None
 
 
 @dataclass(slots=True)

@@ -18,6 +18,7 @@ class HeavyMetalTableLayout:
     header_row: int
     sample_name_column: int
     element_columns: tuple[tuple[str, int], ...]
+    group_column: int | None = None
 
 
 def normalize_header(value: object | None) -> str:
@@ -63,6 +64,8 @@ def find_heavy_metal_table_layout(
             if len(symbols) != len(set(symbols)):
                 raise ValueError("duplicated element header")
             return HeavyMetalTableLayout(
-                header_row, sample_columns[0], element_columns
+                header_row, sample_columns[0], element_columns,
+                next((index for index, header in enumerate(headers)
+                      if re.sub(r"\s+", "", header).casefold() in {"g#", "group#"}), None),
             )
     return None

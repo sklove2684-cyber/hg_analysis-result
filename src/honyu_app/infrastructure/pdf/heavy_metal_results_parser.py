@@ -25,8 +25,8 @@ RECOVERY_NAMES = {"저": "low", "중": "mid", "고": "high"}
 
 class HeavyMetalResultsParser:
     name = "heavy-metal-pdfplumber"
-    version = "1.1.0"
-    layout_id = "list-of-results-quant-average-dynamic-v2"
+    version = "1.2.0"
+    layout_id = "list-of-results-quant-average-dynamic-v3-group-header"
 
     def parse(self, pdf_path: Path, *, analysis_type: str, analysis_no_start: int,
               analysis_no_end: int, progress_callback: Callable[[int, int], None] | None = None,

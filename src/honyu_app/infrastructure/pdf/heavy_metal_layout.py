@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+import unicodedata
 
 
 ELEMENT_SYMBOLS = frozenset(
@@ -36,6 +37,21 @@ def element_symbol_from_header(value: object | None) -> str | None:
     return symbols[-1] if len(set(symbols)) == 1 else None
 
 
+def is_group_header(value: object | None) -> bool:
+    """Recognize a G#/Group# token inside a possibly aggregated header cell.
+
+    pdfplumber can put the table title and a later header row in the same
+    physical column.  Matching the whole accumulated string therefore misses
+    values such as ``List of Results G\n#`` even though the G# token is clear.
+    """
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    return re.search(
+        r"(?<![0-9A-Za-z])(?:g|group)[\s\u200b]*#(?![0-9A-Za-z])",
+        text,
+        re.IGNORECASE,
+    ) is not None
+
+
 def find_heavy_metal_table_layout(
     table: list[list[object | None]], *, min_elements: int = 1
 ) -> HeavyMetalTableLayout | None:
@@ -66,6 +82,6 @@ def find_heavy_metal_table_layout(
             return HeavyMetalTableLayout(
                 header_row, sample_columns[0], element_columns,
                 next((index for index, header in enumerate(headers)
-                      if re.sub(r"\s+", "", header).casefold() in {"g#", "group#"}), None),
+                      if is_group_header(header)), None),
             )
     return None

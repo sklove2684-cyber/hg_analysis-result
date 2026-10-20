@@ -74,6 +74,31 @@ class HeavyMetalDynamicParserTests(unittest.TestCase):
             value.element for value in batch.heavy_metal_recovery_values
         )))
 
+    def test_group_header_variants_survive_list_of_results_title_prefix(self) -> None:
+        for header in ("G#", "G #", "G\n#", "Group#", "Group #"):
+            with self.subTest(header=header):
+                table = results_table(("Na", "K"))
+                table[0].insert(0, header)
+                for row in table[1:]:
+                    row.insert(0, "2")
+                table.insert(0, ["List of Results", None, None, None])
+                batch = self._parse(table)
+                self.assertEqual(24, len(batch.heavy_metal_recovery_values))
+                self.assertEqual(
+                    {2}, {value.group_no for value in batch.heavy_metal_recovery_values}
+                )
+
+    def test_group_header_split_across_rows_is_detected(self) -> None:
+        table = results_table(("Na", "K"))
+        table[0].insert(0, "#")
+        for row in table[1:]:
+            row.insert(0, "1")
+        table.insert(0, ["List of Results\nG", None, None, None])
+        batch = self._parse(table)
+        self.assertEqual(
+            {1}, {value.group_no for value in batch.heavy_metal_recovery_values}
+        )
+
     def test_duplicated_element_header_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValidationError, "PDF_LAYOUT_MISMATCH"):
             self._parse(results_table(("Fe", "Mn", "Fe")))

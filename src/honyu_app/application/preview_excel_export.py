@@ -89,6 +89,30 @@ def _normalize_template_material_header(value: object | None) -> str:
     return re.sub(r"[\s,._-]+", "", str(value or "").strip().casefold())
 
 
+def _has_adjacent_template_headers(
+    snapshot: ExcelTemplateSnapshot,
+    sheet: str,
+    material_header: str,
+    value_header: str,
+    *,
+    max_row: int = 8,
+    max_column: int = 18,
+) -> bool:
+    """Find a material/value header pair in the template's top header area."""
+    expected_material = _normalize_template_material_header(material_header)
+    expected_value = _normalize_template_material_header(value_header)
+    for row in range(1, max_row + 1):
+        for column in range(1, max_column):
+            material = snapshot.cell(sheet, f"{_column_name(column)}{row}").value
+            value = snapshot.cell(sheet, f"{_column_name(column + 1)}{row}").value
+            if (
+                _normalize_template_material_header(material) == expected_material
+                and _normalize_template_material_header(value) == expected_value
+            ):
+                return True
+    return False
+
+
 def _column_number(name: str) -> int:
     value = 0
     for character in name:
@@ -653,6 +677,25 @@ ISOPROPYL_ACETATE_PROFILE = TemplateProfile(
     name="이소프로필 아세테이트",
     required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
     area_sheet="LOD(area입력)",
+    std_columns={"Isopropyl acetate": "F"},
+    numeric_columns={"Isopropyl acetate": "F"},
+    recovery_columns={"Isopropyl acetate": "B"},
+    std_row_start=4,
+    recovery_row_start={
+        ConcentrationLevel.LOW: 28,
+        ConcentrationLevel.MID: 31,
+        ConcentrationLevel.HIGH: 34,
+    },
+    worker_row_start=19,
+    worker_row_end=122,
+    use_runtime_std_rt=True,
+)
+
+ISOPROPYL_ACETATE_LEGACY_PROFILE = TemplateProfile(
+    key="isopropyl_acetate",
+    name="이소프로필 아세테이트",
+    required_sheets=("검량선", "LOD(area입력)", "회수율", "std"),
+    area_sheet="LOD(area입력)",
     std_columns={"Isopropyl acetate": "E"},
     numeric_columns={"Isopropyl acetate": "E"},
     recovery_columns={"Isopropyl acetate": "B"},
@@ -948,7 +991,12 @@ class PreviewExcelExportService:
         recheck standards.  Set selection is only activated when a replicate
         number repeats, so ordinary STD1~5/6 runs retain their normal behaviour.
         """
-        std_samples = [sample for sample in samples if sample.sample_type is SampleType.STD]
+        std_samples = [
+            sample
+            for sample in samples
+            if sample.sample_type is SampleType.STD
+            and cls._sample_has_excel_eligible_peak(sample)
+        ]
         replicate_counts: dict[int, int] = defaultdict(int)
         for sample in std_samples:
             if sample.replicate_no is not None:
@@ -978,8 +1026,9 @@ class PreviewExcelExportService:
         required = cls._std_replicates(profile, method)
         runs: list[list[Sample]] = []
         current: list[Sample] = []
+        eligible_std_ids = {sample.sample_id for sample in std_samples}
         for sample in samples:
-            if sample.sample_type is SampleType.STD:
+            if sample.sample_id in eligible_std_ids:
                 if (
                     current
                     and sample.replicate_no is not None
@@ -1164,6 +1213,16 @@ class PreviewExcelExportService:
         return tuple(targets)
 
     @staticmethod
+    def _sample_has_excel_eligible_peak(sample: Sample) -> bool:
+        # Empty peaks are retained for lightweight unit fixtures.  Real PDF
+        # samples with peaks are relevant only when at least one peak belongs
+        # to the selected analysis and is eligible for Excel output.
+        return not sample.peaks or any(
+            peak.include_for_excel and peak.material_standard not in {None, "CS2"}
+            for peak in sample.peaks
+        )
+
+    @staticmethod
     def _median_rt(cluster: list[tuple[Decimal, UUID]]) -> Decimal:
         values = sorted(rt for rt, _sample_id in cluster)
         middle = len(values) // 2
@@ -1231,6 +1290,12 @@ class PreviewExcelExportService:
                 .casefold()
                 for address in ("I3", "J3")
             )
+            isopropyl_acetate_headers = _has_adjacent_template_headers(
+                snapshot,
+                MEK_PROFILE.area_sheet,
+                "Isopropyl acetate",
+                "area",
+            )
             if primary_header == "acetic acid":
                 profile = ACETIC_ACID_PROFILE
             elif primary_header == "ethylene glycol":
@@ -1247,12 +1312,14 @@ class PreviewExcelExportService:
                 profile = VINYL_ACETATE_PROFILE
             elif primary_header == "pyridine":
                 profile = PYRIDINE_PROFILE
+            elif isopropyl_acetate_headers:
+                profile = ISOPROPYL_ACETATE_PROFILE
             elif ipa_headers == ("ipa", "area"):
                 profile = IPA_PROFILE
             elif alternate_header == "메틸 n-아밀케톤":
                 profile = METHYL_N_AMYL_KETONE_PROFILE
             elif alternate_header == "isopropyl acetate":
-                profile = ISOPROPYL_ACETATE_PROFILE
+                profile = ISOPROPYL_ACETATE_LEGACY_PROFILE
             elif alternate_header == "stoddard solvent":
                 profile = STODDARD_SOLVENT_PROFILE
             elif (
@@ -1867,15 +1934,18 @@ class PreviewExcelExportService:
                 )
             )
 
-    @staticmethod
+    @classmethod
     def _recovery_replicate_map(
-        samples: list[Sample], result: ExcelPreviewResult
+        cls, samples: list[Sample], result: ExcelPreviewResult
     ) -> dict[int, int]:
         """Map complete recovery sets to Excel slots without changing raw IDs."""
         sets: dict[int, list[Sample]] = {}
         invalid = False
         for sample in samples:
-            if sample.sample_type is not SampleType.RECOVERY:
+            if (
+                sample.sample_type is not SampleType.RECOVERY
+                or not cls._sample_has_excel_eligible_peak(sample)
+            ):
                 continue
             source_id = sample.replicate_no
             if not isinstance(source_id, int) or source_id <= 0:

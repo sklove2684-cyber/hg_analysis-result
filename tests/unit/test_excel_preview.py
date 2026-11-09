@@ -17,6 +17,7 @@ from honyu_app.application.preview_excel_export import (
     G3_PROFILE,
     IPA_AREA_PROFILE,
     IPA_PROFILE,
+    ISOPROPYL_ACETATE_PROFILE,
     ISOAMYL_N_PROPYL_ACETATE_PROFILE,
     LEGACY_PROFILE,
     MEK_PROFILE,
@@ -168,6 +169,20 @@ def ipa_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
     )
     return ExcelTemplateSnapshot(
         Path("ipa-template.xlsx"),
+        MEK_SHEETS,
+        {(cell.sheet, cell.address): cell for cell in (*headers, *cells)},
+    )
+
+
+def isopropyl_acetate_snapshot(*cells: TemplateCell) -> ExcelTemplateSnapshot:
+    headers = (
+        TemplateCell("LOD(area입력)", "E2", True, "Isopropyl acetate", "string"),
+        TemplateCell("LOD(area입력)", "F2", True, "area", "string"),
+        TemplateCell("LOD(area입력)", "A19", True, "262-530", "string"),
+        TemplateCell("LOD(area입력)", "A20", True, "262-531", "string"),
+    )
+    return ExcelTemplateSnapshot(
+        Path("isopropyl-acetate-template.xlsx"),
         MEK_SHEETS,
         {(cell.sheet, cell.address): cell for cell in (*headers, *cells)},
     )
@@ -372,6 +387,90 @@ class ExcelPreviewServiceTests(unittest.TestCase):
         )
         self.assertIs(profile, MEK_PROFILE)
         self.assertEqual(result.issues, [])
+
+    def test_isopropyl_acetate_template_uses_adjacent_material_and_area_headers(self) -> None:
+        result = ExcelPreviewResult(Path("template.xlsx"), StdMethod.A)
+        profile = PreviewExcelExportService._template_profile(
+            isopropyl_acetate_snapshot(), result
+        )
+        self.assertIs(profile, ISOPROPYL_ACETATE_PROFILE)
+        self.assertEqual(profile.std_columns, {"Isopropyl acetate": "F"})
+        self.assertEqual(profile.numeric_columns, {"Isopropyl acetate": "F"})
+        self.assertEqual(profile.worker_row_start, 19)
+        self.assertEqual(result.issues, [])
+
+    def test_isopropyl_acetate_maps_only_f_column_recovery_and_workers(self) -> None:
+        samples = [
+            Sample(
+                replicate,
+                f"STD{replicate}",
+                f"STD{replicate}",
+                SampleType.STD,
+                replicate_no=replicate,
+                peaks=[peak(1, replicate * 100, "Isopropyl acetate")],
+            )
+            for replicate in range(1, 7)
+        ]
+        for replicate in (1, 2, 3):
+            for label, level, area in (
+                ("저", ConcentrationLevel.LOW, 1000),
+                ("중", ConcentrationLevel.MID, 2000),
+                ("고", ConcentrationLevel.HIGH, 3000),
+            ):
+                samples.append(Sample(
+                    10 + len(samples),
+                    f"{label}{replicate}",
+                    f"{label}{replicate}",
+                    SampleType.RECOVERY,
+                    concentration_level=level,
+                    replicate_no=replicate,
+                    peaks=[peak(1, area + replicate, "Isopropyl acetate")],
+                ))
+        samples.extend((
+            Sample(30, "530-사업장", "530-사업장", SampleType.NUMERIC,
+                   worker_match_key="530",
+                   peaks=[peak(1, 10000, "Isopropyl acetate")]),
+            Sample(31, "530B", "530B", SampleType.RECOVERY_BLANK,
+                   peaks=[peak(1, 99999, "Isopropyl acetate")]),
+            Sample(32, "531", "531", SampleType.NUMERIC, worker_match_key="531",
+                   peaks=[peak(1, 4605, "Isopropyl acetate")]),
+        ))
+        source = batch(samples, "이소프로필 아세테이트")
+        source.analysis_no_start = 530
+        source.analysis_no_end = 531
+
+        result = self.service(isopropyl_acetate_snapshot()).preview_batch(
+            source, Path("isopropyl-acetate-template.xlsx"), "A"
+        )
+        mapped = {
+            (row.target_sheet, row.target_cell): row.applied_area
+            for row in result.rows if row.status is ExcelPreviewStatus.MAPPED
+        }
+
+        self.assertTrue(result.can_generate, result.issues)
+        self.assertEqual(16, result.mapped_count)
+        self.assertEqual(0, result.error_count)
+        self.assertEqual(
+            {f"F{row}" for row in range(4, 9)}
+            | {f"B{row}" for row in range(28, 37)}
+            | {"F19", "F20"},
+            {address for _sheet, address in mapped},
+        )
+        self.assertEqual(10000, mapped[("LOD(area입력)", "F19")])
+        self.assertEqual(4605, mapped[("LOD(area입력)", "F20")])
+        self.assertFalse(any(address.startswith("E") for _sheet, address in mapped))
+        blank = next(row for row in result.rows if row.sample_name == "530B")
+        self.assertEqual(ExcelPreviewStatus.EXCLUDED, blank.status)
+
+        method_b = self.service(isopropyl_acetate_snapshot()).preview_batch(
+            source, Path("isopropyl-acetate-template.xlsx"), "B"
+        )
+        method_b_mapped = {
+            (row.target_sheet, row.target_cell): row.applied_area
+            for row in method_b.rows if row.status is ExcelPreviewStatus.MAPPED
+        }
+        self.assertTrue(method_b.can_generate, method_b.issues)
+        self.assertEqual(600, method_b_mapped[("LOD(area입력)", "F8")])
 
     def test_unknown_lod_template_is_not_misclassified_as_mek(self) -> None:
         unknown = ExcelTemplateSnapshot(
